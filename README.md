@@ -190,7 +190,8 @@ Danach läuft alles wie gewohnt weiter. Am X2D nimmst du die Spule vom Teller un
 |---|---|
 | Wägezelle 5 kg (Biegebalken, z. B. YZC-131) | 1 kg reicht für 1-kg-Spulen, 5 kg auch für grössere |
 | HX711-Modul | meist im Set mit der Wägezelle |
-| Gehäuse | z. B. das Gehäuse des FilaMan-Projekts auf MakerWorld (Display weglassen) |
+| Gehäuse | das Gehäuse des FilaMan-Projekts (Display weglassen). Die Pins sind identisch |
+| Touch-Taster TTP223 (optional) | Tara direkt am Gerät, I/O an GPIO25, VCC an 3V3 |
 
 **Verdrahtung HX711 → ESP32-WROOM-32:**
 

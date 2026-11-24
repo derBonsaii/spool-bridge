@@ -15,6 +15,13 @@
 # Wägezelle -> HX711: rot E+, schwarz E-, weiss A-, grün A+ (bei negativem Gewicht A+/A- tauschen
 # oder einfach so lassen: die Kalibrierung gleicht das Vorzeichen aus).
 #
+# Optional: Touch-Taster TTP223 (wie bei FilaMan) für Tara direkt am Gerät:
+#   VCC -> 3V3   GND -> GND   I/O -> GPIO25
+# Ohne Taster einfach nicht anschliessen, die Firmware läuft trotzdem.
+#
+# Die Pins entsprechen dem FilaMan-System (HX711 16/17, PN532 21/22), das Gehäuse passt also.
+# PN532 IRQ/RESET (bei FilaMan 32/33) werden hier nicht gebraucht.
+#
 # Bedienung ohne Display über die Weboberfläche des ESP: http://<IP-des-ESP>/
 #   1. Teller leer -> "Tara" drücken
 #   2. Bekanntes Gewicht auflegen, bei "Kalibriergewicht" eintragen -> "Kalibrieren" drücken
@@ -104,8 +111,20 @@ number:
     restore_value: true
     mode: box
 
+binary_sensor:
+  - platform: gpio
+    name: "Tara-Taster"
+    pin:
+      number: GPIO25
+      mode: INPUT_PULLDOWN
+    filters:
+      - delayed_on: 50ms
+    on_press:
+      - button.press: tare_button
+
 button:
   - platform: template
+    id: tare_button
     name: "Tara"
     on_press:
       - globals.set:
