@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import functools
+import json
+
 from aiohttp import web
+
+# Umlaute unverändert senden (Display am Leser)
+_dumps = functools.partial(json.dumps, ensure_ascii=False)
 
 from .service import Bridge
 
@@ -33,7 +39,7 @@ def make_app(bridge: Bridge) -> web.Application:
             weight = None
         res = await bridge.handle_scan(reader, uid, weight)
         status = {"unknown": 404, "error": 400}.get(res["result"], 200)
-        return web.json_response(res, status=status)
+        return web.json_response(res, status=status, dumps=_dumps)
 
     async def link(request):
         data = await request.json()

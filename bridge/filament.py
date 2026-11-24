@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .spoolman import BAMBU_IDX_FIELD, _decode_extra
@@ -67,8 +68,12 @@ def bambu_spool_info(tray: dict):
     except (TypeError, ValueError):
         remain = -1
     tmin, tmax = num("nozzle_temp_min"), num("nozzle_temp_max")
+    tag_uid = re.sub(r"[^0-9A-Fa-f]", "", str(tray.get("tag_uid") or "")).upper()
+    if not tag_uid.strip("0"):
+        tag_uid = ""
     return {
         "uuid": uuid,
+        "tag_uid": tag_uid,
         "name": (tray.get("tray_sub_brands") or material).strip(),
         "material": material,
         "color_hex": str(tray.get("tray_color") or "FFFFFFFF")[:6].upper(),

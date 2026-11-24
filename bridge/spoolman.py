@@ -22,6 +22,24 @@ def normalize_uid(uid: str) -> str:
     return re.sub(r"[^0-9A-Fa-f]", "", uid or "").upper()
 
 
+def uid_matches(a: str, b: str) -> bool:
+    """Vergleicht zwei Tag-UIDs. Toleriert mit Nullen aufgefüllte UIDs (Bambu meldet
+    z.B. '4D3E2A1B00000000', der PN532 liest '4D3E2A1B')."""
+    a, b = normalize_uid(a), normalize_uid(b)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long_ = sorted((a, b), key=len)
+    return long_.startswith(short) and set(long_[len(short):]) <= {"0"}
+
+
+def spool_tags(spool: dict) -> list[str]:
+    """Alle Tag-UIDs einer Spule (Extra-Feld 'NFC Tag', mehrere durch Komma getrennt)."""
+    raw = _decode_extra((spool.get("extra") or {}).get(NFC_FIELD))
+    return [normalize_uid(t) for t in str(raw or "").split(",") if normalize_uid(t)]
+
+
 def _decode_extra(value: Any) -> Any:
     """Spoolman speichert Extra-Felder als JSON-kodierte Strings."""
     if value is None:
@@ -72,21 +90,25 @@ class Spoolman:
         return await self._req("GET", f"/spool/{spool_id}")
 
     async def find_by_uid(self, uid: str) -> Optional[dict]:
-        uid = normalize_uid(uid)
         for s in await self.spools():
-            tag = _decode_extra((s.get("extra") or {}).get(NFC_FIELD))
-            if tag and normalize_uid(str(tag)) == uid:
+            if any(uid_matches(t, uid) for t in spool_tags(s)):
                 return s
         return None
 
     async def link_uid(self, spool_id: int, uid: str) -> None:
+        """Tag an eine Spule hängen (zusätzlich zu vorhandenen, z.B. zweite Bambu-Seite).
+
+        Ein Tag darf nur an einer Spule hängen: bei anderen Spulen wird er entfernt.
+        """
         uid = normalize_uid(uid)
-        # Tag darf nur an einer Spule hängen.
         for s in await self.spools():
-            tag = _decode_extra((s.get("extra") or {}).get(NFC_FIELD))
-            if tag and normalize_uid(str(tag)) == uid and s["id"] != spool_id:
-                await self._set_extra(s, NFC_FIELD, "")
-        await self._set_extra(await self.spool(spool_id), NFC_FIELD, uid)
+            tags = spool_tags(s)
+            if s["id"] != spool_id and any(uid_matches(t, uid) for t in tags):
+                await self._set_extra(s, NFC_FIELD, ",".join(t for t in tags if not uid_matches(t, uid)))
+        spool = await self.spool(spool_id)
+        tags = spool_tags(spool)
+        if not any(uid_matches(t, uid) for t in tags):
+            await self._set_extra(spool, NFC_FIELD, ",".join(tags + [uid]))
 
     async def _set_extra(self, spool: dict, key: str, value: str) -> None:
         extra = dict(spool.get("extra") or {})

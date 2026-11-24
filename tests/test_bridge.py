@@ -343,3 +343,37 @@ async def test_web_scan_weight_parsing(env, aiohttp_client):
     assert r.status == 200 and "remaining_weight" not in fake.spools[1]
     r = await client.post("/api/scan", json={"reader": "x2d", "uid": "04-A1-B2-C3", "weight": "1200.0"})
     assert r.status == 200 and fake.spools[1]["remaining_weight"] == 1000
+
+
+def test_uid_matches_padding():
+    from bridge.spoolman import uid_matches, spool_tags
+    assert uid_matches("4D3E2A1B00000000", "4D-3E-2A-1B")
+    assert not uid_matches("4D3E2A1B00000001", "4D3E2A1B")
+    assert not uid_matches("", "4D3E2A1B")
+    assert spool_tags({"extra": {"nfc_id": json.dumps("aa11, BB22")}}) == ["AA11", "BB22"]
+
+
+async def test_bambu_tag_uid_learned_from_ams(env):
+    fake, bridge, printer, clock = env
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    tray = {**BAMBU_TRAY, "tag_uid": "4D3E2A1B00000000"}
+    printer.report({"ams": [{"id": "0", "tray": [tray]}], "tray_exist_bits": "2"})
+    await _settle(bridge)
+    sp = next(s for s in fake.spools.values() if s["id"] > 2)
+    assert json.loads(sp["extra"]["nfc_id"]) == "4D3E2A1B00000000"
+
+    # Leser liest dieselbe Seite -> Spule erkannt, kein "unbekannter Tag"
+    found = await bridge.spoolman.find_by_uid("4D-3E-2A-1B")
+    assert found["id"] == sp["id"]
+
+    # zweite Seite der Spule manuell verknüpfen -> beide Tags hängen an der Spule
+    await bridge.spoolman.link_uid(sp["id"], "77665544")
+    assert json.loads(fake.spools[sp["id"]]["extra"]["nfc_id"]) == "4D3E2A1B00000000,77665544"
+
+
+async def test_link_moves_tag_between_spools(env):
+    fake, bridge, printer, clock = env
+    await bridge.spoolman.link_uid(2, "04A1B2C3")  # war an Spule 1
+    assert json.loads(fake.spools[1]["extra"]["nfc_id"]) == ""
+    assert json.loads(fake.spools[2]["extra"]["nfc_id"]) == "04A1B2C3"

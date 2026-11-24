@@ -192,6 +192,7 @@ Danach läuft alles wie gewohnt weiter. Am X2D nimmst du die Spule vom Teller un
 | HX711-Modul | meist im Set mit der Wägezelle |
 | Gehäuse | das Gehäuse des FilaMan-Projekts (Display weglassen). Die Pins sind identisch |
 | Touch-Taster TTP223 (optional) | Tara direkt am Gerät, I/O an GPIO25, VCC an 3V3 |
+| OLED 0.96" SSD1306 128×64, I2C (optional) | zeigt Gewicht, Status und Spule. SDA/SCL parallel zum PN532 an GPIO21/22, VCC an 3V3 |
 
 **Verdrahtung HX711 → ESP32-WROOM-32:**
 
@@ -204,7 +205,9 @@ Danach läuft alles wie gewohnt weiter. Am X2D nimmst du die Spule vom Teller un
 
 Wägezelle → HX711: rot E+, schwarz E−, weiss A−, grün A+. Die Farben können je nach Hersteller abweichen.
 
-**Einrichten (ohne Display über den Browser):**
+**Display (optional):** Zeigt oben den Status («Bereit», «Jetzt ins AMS», «Gewogen», «Neuer Tag», «Bridge offline»), in der Mitte das Live-Gewicht und unten die erkannte Spule. Ohne Display läuft alles gleich.
+
+**Einrichten (über den Browser):**
 1. `esphome/spool-waage-wroom32.yaml` flashen. `name`, `reader_id` und `bridge_url` wie beim Leser setzen.
 2. Die Weboberfläche des ESP öffnen: `http://<IP-des-ESP>/`
 3. Teller leer lassen und auf **Tara** drücken.
@@ -284,7 +287,9 @@ Nimmst du eine Spule aus dem AMS, setzt die Bridge den Lagerort in Spoolman auto
 - Ist sie noch nicht vorhanden, legt sie Hersteller **Bambu Lab**, das Filament (z. B. *PLA Basic*, Farbe, Gewicht, Bambu-ID) und die Spule automatisch an. Gleiche Filamente werden wiederverwendet, es entsteht also pro Farbe/Sorte nur ein Eintrag.
 - Sie setzt den Lagerort und übernimmt die Restmenge, die das AMS meldet (siehe Abschnitt 8).
 
-Spulen, die beim Start der Bridge schon im AMS stecken, werden ebenfalls erfasst. Steckst du eine Bambu-Spule später in einen anderen Slot, wird nur der Lagerort angepasst, es entsteht keine doppelte Spule.
+Spulen, die beim Start der Bridge schon im AMS stecken, werden ebenfalls erfasst.
+
+Die Bridge merkt sich auch die **Kennung des RFID-Chips**, den das AMS gelesen hat, im Feld *NFC Tag* der Spule. Danach erkennen Leser und Waage die Bambu-Spule ohne Sticker. Jede Bambu-Spule hat **zwei Chips, einen auf jeder Seite**. Gelernt wird nur der, den das AMS gelesen hat. Hältst du die andere Seite an den Leser, erscheint «Neuer Tag». Verknüpfe ihn einmal im Web-UI mit derselben Spule. Eine Spule kann beliebig viele Tags haben. Steckst du eine Bambu-Spule später in einen anderen Slot, wird nur der Lagerort angepasst, es entsteht keine doppelte Spule.
 
 **SV08:** Spule scannen, fertig.
 

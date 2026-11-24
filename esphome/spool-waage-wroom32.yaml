@@ -1,4 +1,5 @@
-# ESPHome-Firmware: NFC-Leser MIT WAAGE (ESP32-WROOM-32 + PN532 über I2C + HX711 + Wägezelle).
+# ESPHome-Firmware: NFC-Leser MIT WAAGE (ESP32-WROOM-32 + PN532 über I2C + HX711 + Wägezelle)
+# und optionalem OLED-Display 0.96" SSD1306 (wie FilaMan).
 # Spule auf den Teller legen -> Tag und Gewicht werden gelesen -> Bridge trägt die Restmenge
 # in Spoolman ein (Bruttogewicht minus Leergewicht der Spule). Ohne Gewicht auf dem Teller
 # (Spule nur an den Leser gehalten) funktioniert der Leser wie die Variante ohne Waage.
@@ -14,6 +15,10 @@
 #   VCC -> 3V3   GND -> GND   DT (DOUT) -> GPIO16   SCK -> GPIO17
 # Wägezelle -> HX711: rot E+, schwarz E-, weiss A-, grün A+ (bei negativem Gewicht A+/A- tauschen
 # oder einfach so lassen: die Kalibrierung gleicht das Vorzeichen aus).
+#
+# Optional: OLED 0.96" SSD1306 128x64 (I2C) – teilt sich die I2C-Pins mit dem PN532:
+#   VCC -> 3V3   GND -> GND   SDA -> GPIO21   SCL -> GPIO22
+# Ohne Display läuft alles gleich, ESPHome meldet dann nur eine Warnung im Log.
 #
 # Optional: Touch-Taster TTP223 (wie bei FilaMan) für Tara direkt am Gerät:
 #   VCC -> 3V3   GND -> GND   I/O -> GPIO25
@@ -66,6 +71,14 @@ web_server:
   version: 3
 
 globals:
+  - id: status_text
+    type: std::string
+    restore_value: false
+    initial_value: '"Bereit"'
+  - id: spool_text
+    type: std::string
+    restore_value: false
+    initial_value: '""'
   - id: tare_raw
     type: float
     restore_value: true
@@ -110,6 +123,31 @@ number:
     optimistic: true
     restore_value: true
     mode: box
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 12
+    glyphsets: [GF_Latin_Core]
+  - file: "gfonts://Roboto@700"
+    id: font_big
+    size: 26
+    glyphs: "0123456789-.g "
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    update_interval: 500ms
+    lambda: |-
+      it.print(0, 0, id(font_small), id(status_text).c_str());
+      float w = id(spool_weight).state;
+      if (isnan(w)) {
+        it.print(64, 16, id(font_big), TextAlign::TOP_CENTER, "--");
+      } else {
+        it.printf(64, 16, id(font_big), TextAlign::TOP_CENTER, "%.0f g", w);
+      }
+      it.print(0, 51, id(font_small), id(spool_text).c_str());
 
 binary_sensor:
   - platform: gpio
@@ -163,6 +201,13 @@ light:
     output: led_out
 
 script:
+  - id: status_reset
+    mode: restart
+    then:
+      - delay: 15s
+      - lambda: |-
+          id(status_text) = "Bereit";
+          id(spool_text) = "";
   - id: blink_ok
     mode: restart
     then:
@@ -194,6 +239,7 @@ pn532_i2c:
   update_interval: 500ms
   on_tag:
     then:
+      - lambda: id(status_text) = "Lese...";
       # kurz warten, bis die Spule ruhig liegt und das Gewicht stabil ist
       - delay: ${settle_ms}
       - http_request.post:
@@ -207,8 +253,30 @@ pn532_i2c:
               float w = id(spool_weight).state;
               if (isnan(w) || w < ${min_weight}) return std::string("");
               return str_sprintf("%.1f", w);
+          capture_response: true
+          max_response_buffer_size: 1kB
           on_response:
             then:
+              - lambda: |-
+                  // Werte aus der JSON-Antwort der Bridge fürs Display holen
+                  auto field = [&](const char *key) -> std::string {
+                    std::string k = std::string("\"") + key + "\": \"";
+                    size_t p = body.find(k);
+                    if (p == std::string::npos) return "";
+                    p += k.size();
+                    size_t e = body.find('"', p);
+                    return e == std::string::npos ? "" : body.substr(p, e - p);
+                  };
+                  std::string result = field("result");
+                  std::string spool = field("spool");
+                  if (spool.size() > 21) spool = spool.substr(0, 21);
+                  id(spool_text) = spool;
+                  if (result == "armed") id(status_text) = "Jetzt ins AMS";
+                  else if (result == "assigned") id(status_text) = "Zugewiesen";
+                  else if (result == "weighed") id(status_text) = "Gewogen";
+                  else if (result == "unknown") { id(status_text) = "Neuer Tag"; id(spool_text) = "im Web zuweisen"; }
+                  else id(status_text) = "Fehler";
+              - script.execute: status_reset
               - if:
                   condition:
                     lambda: return response->status_code == 200;
@@ -224,4 +292,8 @@ pn532_i2c:
                           - script.execute: blink_error
           on_error:
             then:
+              - lambda: |-
+                  id(status_text) = "Bridge offline";
+                  id(spool_text) = "";
+              - script.execute: status_reset
               - script.execute: blink_error

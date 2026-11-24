@@ -193,6 +193,9 @@ class Bridge:
             if info["remaining"] is not None:
                 await self.spoolman.set_remaining(spool["id"], info["remaining"])
             self.event("ok", f"{printer} {slot_name(slot)}: Bambu-Spule {spool_label(spool)} erkannt")
+        if info.get("tag_uid"):
+            # RFID-Kennung des gelesenen Chips merken -> Spule ist am Leser/an der Waage erkennbar
+            await self.spoolman.link_uid(spool["id"], info["tag_uid"])
         await self.spoolman.move_all(loc, self.cfg.storage_location, except_id=spool["id"])
         await self.spoolman.set_location(spool["id"], loc)
         self._invalidate()
