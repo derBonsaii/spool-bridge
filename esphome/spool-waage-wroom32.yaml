@@ -1,0 +1,208 @@
+# ESPHome-Firmware: NFC-Leser MIT WAAGE (ESP32-WROOM-32 + PN532 über I2C + HX711 + Wägezelle).
+# Spule auf den Teller legen -> Tag und Gewicht werden gelesen -> Bridge trägt die Restmenge
+# in Spoolman ein (Bruttogewicht minus Leergewicht der Spule). Ohne Gewicht auf dem Teller
+# (Spule nur an den Leser gehalten) funktioniert der Leser wie die Variante ohne Waage.
+#
+# Verdrahtung PN532 (4-Pin-Header) -> ESP32-WROOM-32 DevKit:
+#   GND        -> GND
+#   VCC        -> 3V3
+#   TXD (=SDA) -> GPIO21
+#   RXD (=SCL) -> GPIO22
+# PN532-DIP-Schalter auf I2C stellen: Schalter 1 = ON, Schalter 2 = OFF (Aufdruck prüfen).
+#
+# Verdrahtung HX711 -> ESP32-WROOM-32:
+#   VCC -> 3V3   GND -> GND   DT (DOUT) -> GPIO16   SCK -> GPIO17
+# Wägezelle -> HX711: rot E+, schwarz E-, weiss A-, grün A+ (bei negativem Gewicht A+/A- tauschen
+# oder einfach so lassen: die Kalibrierung gleicht das Vorzeichen aus).
+#
+# Bedienung ohne Display über die Weboberfläche des ESP: http://<IP-des-ESP>/
+#   1. Teller leer -> "Tara" drücken
+#   2. Bekanntes Gewicht auflegen, bei "Kalibriergewicht" eintragen -> "Kalibrieren" drücken
+#   Die Werte bleiben nach einem Neustart erhalten. Danach Tara nur noch bei Bedarf.
+#
+# Rückmeldung über die blaue Onboard-LED (GPIO2):
+#   1x lang   = Spule erkannt (Gewicht eingetragen, X2D: jetzt einstecken / SV08: aktiv gesetzt)
+#   2x kurz   = unbekannter Tag -> im Web-UI der Bridge zuweisen
+#   5x schnell = Fehler (Bridge nicht erreichbar o.ä.)
+
+substitutions:
+  name: spool-waage-x2d       # Gerätename im Netz
+  reader_id: x2d              # muss in config.yaml unter readers stehen
+  bridge_url: http://truenas.local:8099/api/scan
+  led_pin: GPIO2              # Onboard-LED der meisten WROOM-32-DevKits
+  min_weight: "30"            # darunter gilt der Teller als leer (Gramm)
+  settle_ms: 1500ms           # Wartezeit nach dem Auflegen, bis das Gewicht ruhig ist
+
+esphome:
+  name: ${name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+api:
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${name}
+
+captive_portal:
+
+web_server:
+  port: 80
+  version: 3
+
+globals:
+  - id: tare_raw
+    type: float
+    restore_value: true
+    initial_value: "0"
+  - id: scale_factor        # Rohwert pro Gramm
+    type: float
+    restore_value: true
+    initial_value: "0"
+
+sensor:
+  - platform: hx711
+    id: scale_raw
+    name: "Waage Rohwert"
+    dout_pin: GPIO16
+    clk_pin: GPIO17
+    gain: 128
+    update_interval: 200ms
+    entity_category: diagnostic
+    filters:
+      - median:
+          window_size: 5
+          send_every: 1
+  - platform: template
+    id: spool_weight
+    name: "Gewicht"
+    unit_of_measurement: g
+    accuracy_decimals: 0
+    update_interval: 500ms
+    lambda: |-
+      if (id(scale_factor) == 0 || isnan(id(scale_raw).state)) return NAN;
+      return (id(scale_raw).state - id(tare_raw)) / id(scale_factor);
+
+number:
+  - platform: template
+    id: cal_weight
+    name: "Kalibriergewicht"
+    unit_of_measurement: g
+    min_value: 10
+    max_value: 5000
+    step: 1
+    initial_value: 1000
+    optimistic: true
+    restore_value: true
+    mode: box
+
+button:
+  - platform: template
+    name: "Tara"
+    on_press:
+      - globals.set:
+          id: tare_raw
+          value: !lambda return id(scale_raw).state;
+  - platform: template
+    name: "Kalibrieren"
+    on_press:
+      - lambda: |-
+          float diff = id(scale_raw).state - id(tare_raw);
+          if (id(cal_weight).state > 0 && diff != 0) {
+            id(scale_factor) = diff / id(cal_weight).state;
+            ESP_LOGI("waage", "Kalibriert: %.3f Rohwert/g", id(scale_factor));
+          } else {
+            ESP_LOGW("waage", "Kalibrieren fehlgeschlagen: erst Tara, dann Gewicht auflegen");
+          }
+
+http_request:
+  verify_ssl: false
+  timeout: 10s
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true          # im ESPHome-Log muss ein Gerät auf 0x24 erscheinen
+  frequency: 100kHz
+
+output:
+  - platform: gpio
+    pin: ${led_pin}
+    id: led_out
+
+light:
+  - platform: binary
+    id: status_led
+    output: led_out
+
+script:
+  - id: blink_ok
+    mode: restart
+    then:
+      - light.turn_on: status_led
+      - delay: 1500ms
+      - light.turn_off: status_led
+  - id: blink_unknown
+    mode: restart
+    then:
+      - repeat:
+          count: 2
+          then:
+            - light.turn_on: status_led
+            - delay: 200ms
+            - light.turn_off: status_led
+            - delay: 200ms
+  - id: blink_error
+    mode: restart
+    then:
+      - repeat:
+          count: 5
+          then:
+            - light.turn_on: status_led
+            - delay: 80ms
+            - light.turn_off: status_led
+            - delay: 80ms
+
+pn532_i2c:
+  update_interval: 500ms
+  on_tag:
+    then:
+      # kurz warten, bis die Spule ruhig liegt und das Gewicht stabil ist
+      - delay: ${settle_ms}
+      - http_request.post:
+          url: ${bridge_url}
+          request_headers:
+            Content-Type: application/json
+          json:
+            reader: ${reader_id}
+            uid: !lambda return x;
+            weight: !lambda |-
+              float w = id(spool_weight).state;
+              if (isnan(w) || w < ${min_weight}) return std::string("");
+              return str_sprintf("%.1f", w);
+          on_response:
+            then:
+              - if:
+                  condition:
+                    lambda: return response->status_code == 200;
+                  then:
+                    - script.execute: blink_ok
+                  else:
+                    - if:
+                        condition:
+                          lambda: return response->status_code == 404;
+                        then:
+                          - script.execute: blink_unknown
+                        else:
+                          - script.execute: blink_error
+          on_error:
+            then:
+              - script.execute: blink_error

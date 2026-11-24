@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Optional
 from pathlib import Path
 
 import yaml
@@ -23,7 +24,7 @@ class PrinterCfg:
 class Config:
     spoolman_url: str
     printers: dict[str, PrinterCfg]
-    readers: dict[str, str]  # reader-id -> printer-name
+    readers: dict[str, Optional[str]]  # reader-id -> printer-name (None = nur Waage)
     storage_location: str = "Lager"
     window_seconds: float = 60.0
     port: int = 8099
@@ -41,9 +42,9 @@ def load(path: str | Path) -> Config:
         p.setdefault("location", name.upper())
         printers[name] = PrinterCfg(name=name, type=ptype, **p)
 
-    readers = {str(k): str(v) for k, v in (raw.get("readers") or {}).items()}
+    readers = {str(k): (str(v) if v else None) for k, v in (raw.get("readers") or {}).items()}
     for reader, printer in readers.items():
-        if printer not in printers:
+        if printer is not None and printer not in printers:
             raise ValueError(f"Leser '{reader}' verweist auf unbekannten Drucker '{printer}'")
 
     if not raw.get("spoolman_url"):

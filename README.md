@@ -111,6 +111,7 @@ Es gibt zwei Firmware-Varianten:
 |---|---|---|
 | ESP32-S3 DevKitC-1 | `esphome/spool-reader.yaml` | RGB-LED (Farben) |
 | ESP32-WROOM-32 DevKit | `esphome/spool-reader-wroom32.yaml` | blaue Onboard-LED (Blinkmuster), PN532 über **I2C** |
+| ESP32-WROOM-32 + **Waage** | `esphome/spool-waage-wroom32.yaml` | wie oben, zusätzlich HX711 + Wägezelle (Abschnitt 4.5) |
 
 ### 4.1 Verdrahtung (PN532 → ESP32-S3 DevKitC-1)
 
@@ -174,6 +175,46 @@ Für den zweiten Leser kopierst du die Datei und änderst nur `name` und `reader
 
 - **X2D:** Der Leser kommt direkt neben das AMS, zum Beispiel in ein kleines Gehäuse an der Seite. Die Lesereichweite liegt bei etwa 2–4 cm.
 - **SV08:** Der Leser kann neben dem Drucker stehen. Alternativ setzt du ihn direkt hinter den Spulenhalter, sodass der Sticker beim Aufsetzen der Spule vor dem Leser liegt. Dann wird die Spule ohne Antippen erkannt.
+
+### 4.5 Waage (optional, ohne Display)
+
+Spule auf den Teller legen: Der Leser unter dem Teller liest den Sticker, die Waage das Gewicht. Die Bridge trägt in Spoolman ein:
+
+**Restgewicht = gewogenes Gewicht − Leergewicht der Spule**
+
+Danach läuft alles wie gewohnt weiter. Am X2D nimmst du die Spule vom Teller und steckst sie innerhalb von 60 s in einen AMS-Slot. Hältst du eine Spule nur an den Leser, ohne sie aufzulegen, wird kein Gewicht übertragen.
+
+**Teile** (ESP32 und PN532 wie beim Leser):
+
+| Teil | Bemerkung |
+|---|---|
+| Wägezelle 5 kg (Biegebalken, z. B. YZC-131) | 1 kg reicht für 1-kg-Spulen, 5 kg auch für grössere |
+| HX711-Modul | meist im Set mit der Wägezelle |
+| Gehäuse | z. B. das Gehäuse des FilaMan-Projekts auf MakerWorld (Display weglassen) |
+
+**Verdrahtung HX711 → ESP32-WROOM-32:**
+
+| HX711 | ESP32 |
+|---|---|
+| VCC | 3V3 |
+| GND | GND |
+| DT / DOUT | GPIO16 |
+| SCK | GPIO17 |
+
+Wägezelle → HX711: rot E+, schwarz E−, weiss A−, grün A+. Die Farben können je nach Hersteller abweichen.
+
+**Einrichten (ohne Display über den Browser):**
+1. `esphome/spool-waage-wroom32.yaml` flashen. `name`, `reader_id` und `bridge_url` wie beim Leser setzen.
+2. Die Weboberfläche des ESP öffnen: `http://<IP-des-ESP>/`
+3. Teller leer lassen und auf **Tara** drücken.
+4. Ein bekanntes Gewicht auflegen, z. B. eine volle Spule mit bekanntem Gewicht oder 1 l Wasser in einer gewogenen Flasche. Den Wert bei **Kalibriergewicht** eintragen und **Kalibrieren** drücken.
+5. Kontrolle: Unter **Gewicht** steht jetzt das richtige Gewicht. Tara und Kalibrierung bleiben nach einem Neustart erhalten.
+
+**Leergewicht in Spoolman:** Die Bridge braucht das Leergewicht der Spule und sucht es in dieser Reihenfolge: **Spule → Filament → Hersteller** (*Leergewicht Spule* bzw. *Spool weight*). Am einfachsten trägst du es einmal pro Hersteller ein, z. B. Bambu Lab Kartonspule bzw. eigene Spule. Fehlt es, erscheint im Ereignis-Log eine Warnung, und das Gewicht wird nicht übernommen.
+
+**Reine Waage ohne Drucker:** Steht in `config.yaml` unter `readers:` beim Leser kein Drucker (`waage:` ohne Wert), trägt sie nur das Gewicht ein und bereitet keinen Slot vor.
+
+**Platzierung des Lesers:** Der PN532 sitzt unter dem Teller. Die Spule legst du mit der Sticker-Seite nach unten auf. Bis etwa 3 mm Kunststoff liest er problemlos durch.
 
 ---
 
@@ -254,7 +295,7 @@ Spulen, die beim Start der Bridge schon im AMS stecken, werden ebenfalls erfasst
 
 - **SV08:** Läuft automatisch über Moonraker (Abschnitt 5).
 - **X2D, Original-Bambu-Spulen:** Das AMS schätzt die Restmenge in Prozent, und die Bridge schreibt sie bei jeder Änderung als Restgewicht in Spoolman. Damit das funktioniert, muss in Bambu Studio bzw. am Drucker in den AMS-Einstellungen die Option zum **Aktualisieren der Restmenge** (Restkapazität schätzen) aktiv sein. Die Genauigkeit liegt bei etwa ±1 %, also rund 10 g pro 1-kg-Spule.
-- **X2D, Fremdspulen mit NFC-Sticker:** Version 0.1 kümmert sich um **Erkennung, Slot-Einstellung und Lagerort**, bucht aber **noch keinen Verbrauch** ab. Für Fremdspulen meldet das AMS keine Restmenge. Dafür muss die 3MF des Druckauftrags ausgewertet werden, das ist als nächster Ausbauschritt geplant. Bis dahin kannst du Restgewichte von Zeit zu Zeit per Waage in Spoolman nachführen.
+- **X2D, Fremdspulen mit NFC-Sticker:** Das AMS meldet für Fremdspulen keine Restmenge. Mit der **Waage** (Abschnitt 4.5) wird das Restgewicht bei jedem Auflegen genau nachgeführt. Ohne Waage trägst du es von Zeit zu Zeit von Hand in Spoolman ein.
 
 ---
 

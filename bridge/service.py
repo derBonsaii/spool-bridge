@@ -13,7 +13,7 @@ from .config import Config
 from .detector import SlotDetector
 from .filament import bambu_spool_info, tray_setting
 from .moonraker import Moonraker
-from .spoolman import Spoolman, normalize_uid, spool_label
+from .spoolman import Spoolman, empty_spool_weight, normalize_uid, spool_label
 
 log = logging.getLogger(__name__)
 
@@ -71,20 +71,24 @@ class Bridge:
         self._spool_cache = (0.0, [])
 
     # ------------------------------------------------------------ Scan
-    async def handle_scan(self, reader: str, uid: str) -> dict:
+    async def handle_scan(self, reader: str, uid: str, weight: Optional[float] = None) -> dict:
         uid = normalize_uid(uid)
-        printer = self.cfg.readers.get(reader)
-        if not printer:
+        if reader not in self.cfg.readers:
             self.event("error", f"Unbekannter Leser '{reader}' – in config.yaml unter readers eintragen")
             return {"result": "error", "message": "unknown reader"}
+        printer = self.cfg.readers[reader]  # None = reine Waage ohne Drucker
 
         spool = await self.spoolman.find_by_uid(uid)
         if spool is None:
-            self.unknown = {"uid": uid, "reader": reader, "t": time.time()}
+            self.unknown = {"uid": uid, "reader": reader, "weight": weight, "t": time.time()}
             self.event("warn", f"Unbekannter Tag {uid} – im Web-UI einer Spule zuweisen")
             return {"result": "unknown", "uid": uid}
 
         label = spool_label(spool)
+        if weight is not None:
+            await self._apply_weight(spool, weight)
+        if not printer:
+            return {"result": "weighed", "spool": label}
         if printer in self.moonraker:
             await self._assign_moonraker(printer, spool)
             return {"result": "assigned", "spool": label}
@@ -108,10 +112,26 @@ class Bridge:
         spool = await self.spoolman.spool(spool_id)
         self.event("ok", f"Tag {normalize_uid(uid)} mit {spool_label(spool)} verknüpft")
         reader = (self.unknown or {}).get("reader")
+        weight = (self.unknown or {}).get("weight")
         self.unknown = None
         if reader:  # gleich so behandeln, als wäre die Spule gescannt worden
-            return await self.handle_scan(reader, uid)
+            return await self.handle_scan(reader, uid, weight)
         return {"result": "linked"}
+
+    # ------------------------------------------------------------ Waage
+    async def _apply_weight(self, spool: dict, gross: float) -> None:
+        """Bruttogewicht (Spule auf der Waage) -> Restgewicht in Spoolman."""
+        empty = empty_spool_weight(spool)
+        label = spool_label(spool)
+        if empty is None:
+            self.event("warn", f"{label}: {gross:.0f} g gewogen, aber kein Leergewicht der Spule "
+                               f"in Spoolman – bei Spule, Filament oder Hersteller eintragen")
+            return
+        remaining = max(0.0, gross - empty)
+        await self.spoolman.set_remaining(spool["id"], remaining)
+        self._invalidate()
+        self.event("ok", f"{label}: {gross:.0f} g gewogen − {empty:.0f} g Leerspule "
+                         f"= {remaining:.0f} g Rest")
 
     # ------------------------------------------------------------ Moonraker
     async def _assign_moonraker(self, printer: str, spool: dict) -> None:

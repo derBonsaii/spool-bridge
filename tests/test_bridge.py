@@ -295,3 +295,51 @@ async def test_scan_never_lands_on_bambu_slot(env):
     await _settle(bridge)
     res = await bridge.handle_scan("x2d", "04A1B2C3")
     assert res["result"] == "armed"  # nicht dem Bambu-Slot zugeordnet
+
+
+async def test_scale_sets_remaining_weight(env):
+    fake, bridge, printer, clock = env
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    # Leergewicht beim Filament hinterlegt
+    fake.spools[1]["filament"]["spool_weight"] = 180
+    res = await bridge.handle_scan("x2d", "04A1B2C3", weight=845.4)
+    assert res["result"] == "armed"
+    assert fake.spools[1]["remaining_weight"] == 665.4
+
+    # Leergewicht direkt an der Spule hat Vorrang
+    fake.spools[1]["spool_weight"] = 200
+    await bridge.handle_scan("x2d", "04A1B2C3", weight=845.4)
+    assert fake.spools[1]["remaining_weight"] == 645.4
+
+
+async def test_scale_without_empty_weight_warns(env):
+    fake, bridge, printer, clock = env
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    await bridge.handle_scan("x2d", "04A1B2C3", weight=900)
+    assert "remaining_weight" not in fake.spools[1]
+    assert any("Leergewicht" in e["text"] for e in bridge.events)
+
+
+async def test_scale_only_reader(env):
+    fake, bridge, printer, clock = env
+    bridge.cfg.readers["waage"] = None
+    fake.spools[1]["spool_weight"] = 200
+    res = await bridge.handle_scan("waage", "04A1B2C3", weight=700)
+    assert res["result"] == "weighed"
+    assert fake.spools[1]["remaining_weight"] == 500
+    assert bridge.detectors["x2d"].armed_spool is None
+
+
+async def test_web_scan_weight_parsing(env, aiohttp_client):
+    from bridge.web import make_app
+    fake, bridge, printer, clock = env
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    fake.spools[1]["spool_weight"] = 200
+    client = await aiohttp_client(make_app(bridge))
+    r = await client.post("/api/scan", json={"reader": "x2d", "uid": "04-A1-B2-C3", "weight": ""})
+    assert r.status == 200 and "remaining_weight" not in fake.spools[1]
+    r = await client.post("/api/scan", json={"reader": "x2d", "uid": "04-A1-B2-C3", "weight": "1200.0"})
+    assert r.status == 200 and fake.spools[1]["remaining_weight"] == 1000

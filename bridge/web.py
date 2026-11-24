@@ -25,7 +25,13 @@ def make_app(bridge: Bridge) -> web.Application:
         reader, uid = str(data.get("reader", "")), str(data.get("uid", ""))
         if not reader or not uid:
             return web.json_response({"result": "error", "message": "reader und uid nötig"}, status=400)
-        res = await bridge.handle_scan(reader, uid)
+        weight = None
+        try:
+            if str(data.get("weight", "")).strip():
+                weight = float(data["weight"])
+        except (TypeError, ValueError):
+            weight = None
+        res = await bridge.handle_scan(reader, uid, weight)
         status = {"unknown": 404, "error": 400}.get(res["result"], 200)
         return web.json_response(res, status=status)
 

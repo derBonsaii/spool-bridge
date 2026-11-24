@@ -165,3 +165,16 @@ def spool_label(spool: dict) -> str:
     vendor = (f.get("vendor") or {}).get("name", "")
     parts = [p for p in (vendor, f.get("material"), f.get("name")) if p]
     return f"#{spool['id']} " + " ".join(parts)
+
+
+def empty_spool_weight(spool: dict) -> Optional[float]:
+    """Leergewicht der Spule: Spule > Filament > Hersteller (wie Spoolman selbst)."""
+    f = spool.get("filament") or {}
+    for v in (spool.get("spool_weight"), f.get("spool_weight"),
+              (f.get("vendor") or {}).get("empty_spool_weight")):
+        if v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
+    return None

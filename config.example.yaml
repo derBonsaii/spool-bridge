@@ -30,3 +30,4 @@ printers:
 readers:
   x2d: x2d
   sv08: sv08
+  # waage:        # Leser/Waage ohne Drucker: trägt nur das Gewicht ein
