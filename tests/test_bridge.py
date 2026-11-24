@@ -98,6 +98,8 @@ class FakeSpoolman:
                 "filament": {"material": "PETG", "color_hex": "000000", "name": "Schwarz"}},
         }
         self.fields = {"spool": [], "filament": []}
+        self.vendors = []
+        self.filaments = []
 
     def app(self):
         a = web.Application()
@@ -121,6 +123,36 @@ class FakeSpoolman:
             s.update(await r.json())
             return web.json_response(s)
 
+        async def list_vendors(r):
+            return web.json_response(self.vendors)
+
+        async def add_vendor(r):
+            v = {"id": len(self.vendors) + 1, **(await r.json())}
+            self.vendors.append(v)
+            return web.json_response(v)
+
+        async def list_filaments(r):
+            return web.json_response(self.filaments)
+
+        async def add_filament(r):
+            body = await r.json()
+            vendor = next(v for v in self.vendors if v["id"] == body.pop("vendor_id"))
+            f = {"id": len(self.filaments) + 1, "vendor": vendor, **body}
+            self.filaments.append(f)
+            return web.json_response(f)
+
+        async def add_spool(r):
+            body = await r.json()
+            fil = next(f for f in self.filaments if f["id"] == body.pop("filament_id"))
+            sid = max(self.spools) + 1
+            self.spools[sid] = {"id": sid, "filament": fil, **body}
+            return web.json_response(self.spools[sid])
+
+        a.router.add_get("/api/v1/vendor", list_vendors)
+        a.router.add_post("/api/v1/vendor", add_vendor)
+        a.router.add_get("/api/v1/filament", list_filaments)
+        a.router.add_post("/api/v1/filament", add_filament)
+        a.router.add_post("/api/v1/spool", add_spool)
         a.router.add_get("/api/v1/field/{e}", get_fields)
         a.router.add_post("/api/v1/field/{e}/{k}", add_field)
         a.router.add_get("/api/v1/spool", list_spools)
@@ -181,7 +213,7 @@ async def _settle(bridge):
 
 async def test_end_to_end_scan_insert(env):
     fake, bridge, printer, clock = env
-    assert {f["key"] for f in fake.fields["spool"]} == {"nfc_id"}
+    assert {f["key"] for f in fake.fields["spool"]} == {"nfc_id", "bambu_uuid"}
 
     empty = [{"id": str(i)} for i in range(4)]
     printer.report({"ams": [{"id": "0", "tray": empty}], "tray_exist_bits": "0"})
@@ -217,3 +249,49 @@ async def test_unknown_tag_and_link(env):
     assert res["result"] == "armed"
     assert json.loads(fake.spools[2]["extra"]["nfc_id"]) == "DEADBEEF"
     assert bridge.unknown is None
+
+
+BAMBU_TRAY = {"id": "1", "tray_type": "PLA", "tray_sub_brands": "PLA Basic",
+              "tray_color": "0086D6FF", "tray_info_idx": "GFA00", "tray_weight": "1000",
+              "tray_diameter": "1.75", "nozzle_temp_min": "190", "nozzle_temp_max": "230",
+              "tray_uuid": "A1B2C3D4E5F60718293A4B5C6D7E8F90", "remain": 80}
+
+
+async def test_bambu_rfid_spool_created_and_synced(env):
+    fake, bridge, printer, clock = env
+    trays = [{"id": str(i)} for i in range(4)]
+    printer.report({"ams": [{"id": "0", "tray": trays}], "tray_exist_bits": "0"})
+
+    printer.report({"ams": [{"id": "0", "tray": [BAMBU_TRAY]}], "tray_exist_bits": "2"})
+    await _settle(bridge)
+    new = [s for s in fake.spools.values() if s["id"] > 2]
+    assert len(new) == 1
+    sp = new[0]
+    assert sp["location"] == "X2D AMS A2" and sp["remaining_weight"] == 800
+    assert sp["filament"]["vendor"]["name"] == "Bambu Lab"
+    assert sp["filament"]["color_hex"] == "0086D6"
+
+    # Restmenge sinkt -> Spoolman wird nachgeführt
+    printer.report({"ams": [{"id": "0", "tray": [{**BAMBU_TRAY, "remain": 65}]}]})
+    await _settle(bridge)
+    assert fake.spools[sp["id"]]["remaining_weight"] == 650
+
+    # rausnehmen und wieder einstecken -> keine zweite Spule, kein zweites Filament
+    printer.report({"ams": [{"id": "0", "tray": [{"id": "1"}]}], "tray_exist_bits": "0"})
+    await _settle(bridge)
+    printer.report({"ams": [{"id": "0", "tray": [{**BAMBU_TRAY, "id": "3", "remain": 65}]}],
+                    "tray_exist_bits": "8"})
+    await _settle(bridge)
+    assert len([s for s in fake.spools.values() if s["id"] > 2]) == 1
+    assert len(fake.filaments) == 1
+    assert fake.spools[sp["id"]]["location"] == "X2D AMS A4"
+
+
+async def test_scan_never_lands_on_bambu_slot(env):
+    fake, bridge, printer, clock = env
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    printer.report({"ams": [{"id": "0", "tray": [BAMBU_TRAY]}], "tray_exist_bits": "2"})
+    await _settle(bridge)
+    res = await bridge.handle_scan("x2d", "04A1B2C3")
+    assert res["result"] == "armed"  # nicht dem Bambu-Slot zugeordnet

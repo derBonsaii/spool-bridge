@@ -78,9 +78,14 @@ class SlotDetector:
                 self._recent_inserts[slot] = now
         return assignments, removed
 
-    def scan(self, spool_id: int, now: float):
-        """Ein Tag wurde gescannt. Gibt (slot, spool_id) zurück, falls sofort zuordenbar."""
+    def scan(self, spool_id: int, now: float, exclude: set = frozenset()):
+        """Ein Tag wurde gescannt. Gibt (slot, spool_id) zurück, falls sofort zuordenbar.
+
+        exclude: Slots, die nicht in Frage kommen (z.B. Original-Bambu-Spulen mit RFID).
+        """
         self._expire(now)
+        for slot in exclude:
+            self._recent_inserts.pop(slot, None)
         if len(self._recent_inserts) == 1:
             # Spule wurde kurz vorher eingesteckt (Ablauf B) – eindeutig.
             slot = next(iter(self._recent_inserts))

@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from .bambu import BambuPrinter, Slot, slot_name
 from .config import Config
 from .detector import SlotDetector
-from .filament import tray_setting
+from .filament import bambu_spool_info, tray_setting
 from .moonraker import Moonraker
 from .spoolman import Spoolman, normalize_uid, spool_label
 
@@ -31,6 +31,7 @@ class Bridge:
         self.unknown: Optional[dict] = None
         self._tasks: set = set()
         self._spool_cache: tuple[float, list] = (0.0, [])
+        self._rfid: dict[str, dict] = {}  # printer -> slot -> {uuid, spool_id, remain}
 
     # ------------------------------------------------------------ Setup
     def add_bambu(self, printer: BambuPrinter) -> None:
@@ -89,7 +90,10 @@ class Bridge:
             return {"result": "assigned", "spool": label}
 
         det = self.detectors[printer]
-        hit = det.scan(spool["id"], self.clock())
+        # Slots mit Original-Bambu-Spule (RFID) nie einem gescannten Tag zuordnen
+        rfid_slots = {s for s in det.occupied
+                      if bambu_spool_info(self.bambu[printer].state.tray(s))}
+        hit = det.scan(spool["id"], self.clock(), exclude=rfid_slots)
         if hit:
             slot, _ = hit
             await self.assign_bambu(printer, slot, spool)
@@ -124,11 +128,61 @@ class Bridge:
         if any(a < 4 for a in st.units) and st.exist_bits is None:
             return  # noch kein vollständiger Stand – Basis erst nach pushall bilden
         det = self.detectors[printer.name]
-        assignments, removed = det.update_occupancy(st.occupied(), self.clock())
+        occupied = st.occupied()
+        assignments, removed = det.update_occupancy(occupied, self.clock())
+        seen = self._rfid.setdefault(printer.name, {})
         for slot, spool_id in assignments:
             self._spawn(self._assign_by_id(printer.name, slot, spool_id))
         for slot in removed:
+            seen.pop(slot, None)
             self._spawn(self._slot_emptied(printer.name, slot))
+
+        # Original-Bambu-Spulen (RFID): automatisch in Spoolman anlegen bzw. nachführen
+        for slot in occupied:
+            info = bambu_spool_info(st.tray(slot))
+            if info is None:
+                continue
+            known = seen.get(slot)
+            if known is None or known["uuid"] != info["uuid"]:
+                seen[slot] = {"uuid": info["uuid"], "spool_id": None, "remain": info["remain_pct"]}
+                self._spawn(self._register_bambu_spool(printer.name, slot, info))
+            elif known["spool_id"] and info["remain_pct"] != known["remain"] and info["remaining"] is not None:
+                known["remain"] = info["remain_pct"]
+                self._spawn(self._sync_remaining(known["spool_id"], info["remaining"]))
+
+    async def _register_bambu_spool(self, printer: str, slot: Slot, info: dict) -> None:
+        try:
+            await self._register_bambu_spool_inner(printer, slot, info)
+        except Exception:
+            # beim nächsten Report erneut versuchen
+            self._rfid.get(printer, {}).pop(slot, None)
+            raise
+
+    async def _register_bambu_spool_inner(self, printer: str, slot: Slot, info: dict) -> None:
+        loc = self._location(printer, slot)
+        spool = await self.spoolman.find_by_bambu_uuid(info["uuid"])
+        if spool is None:
+            filament = await self.spoolman.find_or_create_bambu_filament(info)
+            spool = await self.spoolman.create_bambu_spool(filament["id"], info["uuid"], loc,
+                                                           info["remaining"])
+            self.event("ok", f"{printer} {slot_name(slot)}: Bambu-Spule erkannt und in Spoolman "
+                             f"angelegt ({spool_label(spool)})")
+        else:
+            if spool.get("archived"):
+                await self.spoolman._req("PATCH", f"/spool/{spool['id']}", json={"archived": False})
+            if info["remaining"] is not None:
+                await self.spoolman.set_remaining(spool["id"], info["remaining"])
+            self.event("ok", f"{printer} {slot_name(slot)}: Bambu-Spule {spool_label(spool)} erkannt")
+        await self.spoolman.move_all(loc, self.cfg.storage_location, except_id=spool["id"])
+        await self.spoolman.set_location(spool["id"], loc)
+        self._invalidate()
+        entry = self._rfid.get(printer, {}).get(slot)
+        if entry and entry["uuid"] == info["uuid"]:
+            entry["spool_id"] = spool["id"]
+
+    async def _sync_remaining(self, spool_id: int, grams: float) -> None:
+        await self.spoolman.set_remaining(spool_id, grams)
+        self._invalidate()
 
     async def _assign_by_id(self, printer: str, slot: Slot, spool_id: int) -> None:
         await self.assign_bambu(printer, slot, await self.spoolman.spool(spool_id))

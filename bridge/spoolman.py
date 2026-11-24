@@ -13,6 +13,8 @@ log = logging.getLogger(__name__)
 
 NFC_FIELD = "nfc_id"
 BAMBU_IDX_FIELD = "bambu_idx"
+BAMBU_UUID_FIELD = "bambu_uuid"
+BAMBU_VENDOR = "Bambu Lab"
 
 
 def normalize_uid(uid: str) -> str:
@@ -48,7 +50,7 @@ class Spoolman:
     async def ensure_fields(self) -> None:
         """Legt die benötigten Extra-Felder an, falls sie fehlen."""
         wanted = {
-            "spool": {NFC_FIELD: "NFC Tag"},
+            "spool": {NFC_FIELD: "NFC Tag", BAMBU_UUID_FIELD: "Bambu Spulen-UUID"},
             "filament": {BAMBU_IDX_FIELD: "Bambu Filament-ID"},
         }
         for entity, fields in wanted.items():
@@ -93,6 +95,64 @@ class Spoolman:
 
     async def set_location(self, spool_id: int, location: str) -> None:
         await self._req("PATCH", f"/spool/{spool_id}", json={"location": location})
+
+    async def set_remaining(self, spool_id: int, grams: float) -> None:
+        await self._req("PATCH", f"/spool/{spool_id}", json={"remaining_weight": round(grams, 1)})
+
+    # ------------------------------------------------------------ Bambu-RFID-Spulen
+    async def find_by_bambu_uuid(self, uuid: str) -> Optional[dict]:
+        uuid = uuid.upper()
+        for s in await self._req("GET", "/spool", params={"allow_archived": "true"}):
+            val = _decode_extra((s.get("extra") or {}).get(BAMBU_UUID_FIELD))
+            if val and str(val).upper() == uuid:
+                return s
+        return None
+
+    async def _bambu_vendor_id(self) -> int:
+        for v in await self._req("GET", "/vendor"):
+            if (v.get("name") or "").lower() == BAMBU_VENDOR.lower():
+                return v["id"]
+        v = await self._req("POST", "/vendor", json={"name": BAMBU_VENDOR})
+        log.info("Spoolman: Hersteller '%s' angelegt", BAMBU_VENDOR)
+        return v["id"]
+
+    async def find_or_create_bambu_filament(self, info: dict) -> dict:
+        """info: name, material, color_hex, idx, weight, diameter, density, extruder_temp, bed_temp"""
+        vendor_id = await self._bambu_vendor_id()
+        for f in await self._req("GET", "/filament"):
+            if (f.get("vendor") or {}).get("id") != vendor_id:
+                continue
+            idx = _decode_extra((f.get("extra") or {}).get(BAMBU_IDX_FIELD))
+            if idx == info["idx"] and (f.get("color_hex") or "").upper() == info["color_hex"]:
+                return f
+        body = {
+            "name": info["name"],
+            "vendor_id": vendor_id,
+            "material": info["material"],
+            "color_hex": info["color_hex"],
+            "density": info["density"],
+            "diameter": info["diameter"],
+            "weight": info["weight"],
+            "extra": {BAMBU_IDX_FIELD: json.dumps(info["idx"])},
+        }
+        if info.get("extruder_temp"):
+            body["settings_extruder_temp"] = info["extruder_temp"]
+        if info.get("bed_temp"):
+            body["settings_bed_temp"] = info["bed_temp"]
+        f = await self._req("POST", "/filament", json=body)
+        log.info("Spoolman: Filament '%s' #%s angelegt", info["name"], info["color_hex"])
+        return f
+
+    async def create_bambu_spool(self, filament_id: int, uuid: str, location: str,
+                                 remaining: Optional[float]) -> dict:
+        body = {
+            "filament_id": filament_id,
+            "location": location,
+            "extra": {BAMBU_UUID_FIELD: json.dumps(uuid.upper())},
+        }
+        if remaining is not None:
+            body["remaining_weight"] = round(remaining, 1)
+        return await self._req("POST", "/spool", json=body)
 
     async def move_all(self, from_location: str, to_location: str, except_id: int | None = None) -> None:
         for s in await self.spools():

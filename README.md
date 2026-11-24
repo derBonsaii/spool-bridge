@@ -44,7 +44,7 @@ NFC-Spulenerkennung für **Bambu Lab X2D** (AMS) und **Klipper/Moonraker (Sovol 
 | TrueNAS SCALE mit Apps (Docker) | einmal | für Spoolman und die Bridge |
 | ESPHome (z. B. als Home-Assistant-Add-on) | einmal | zum Flashen der Leser |
 
-> Original-Bambu-Spulen musst du nicht taggen, die erkennt das AMS selbst per RFID.
+> Original-Bambu-Spulen musst du nicht taggen. Die erkennt das AMS selbst per RFID, und die Bridge legt sie automatisch in Spoolman an (siehe Abschnitt 7).
 
 ---
 
@@ -207,6 +207,13 @@ Die umgekehrte Reihenfolge geht auch: zuerst einstecken, dann innerhalb von 60 s
 
 Nimmst du eine Spule aus dem AMS, setzt die Bridge den Lagerort in Spoolman automatisch zurück auf `Lager`.
 
+**Original-Bambu-Spulen (RFID):** Einfach ins AMS stecken, nicht scannen. Sobald das AMS den RFID-Chip gelesen hat, passiert Folgendes:
+- Die Bridge sucht die Spule in Spoolman über ihre eindeutige Bambu-Spulen-UUID (Extra-Feld *Bambu Spulen-UUID*).
+- Ist sie noch nicht vorhanden, legt sie Hersteller **Bambu Lab**, das Filament (z. B. *PLA Basic*, Farbe, Gewicht, Bambu-ID) und die Spule automatisch an. Gleiche Filamente werden wiederverwendet, es entsteht also pro Farbe/Sorte nur ein Eintrag.
+- Sie setzt den Lagerort und übernimmt die Restmenge, die das AMS meldet (siehe Abschnitt 8).
+
+Spulen, die beim Start der Bridge schon im AMS stecken, werden ebenfalls erfasst. Steckst du eine Bambu-Spule später in einen anderen Slot, wird nur der Lagerort angepasst, es entsteht keine doppelte Spule.
+
 **SV08:** Spule scannen, fertig.
 
 **Manuell korrigieren:** Fahre im Web-UI mit der Maus über einen belegten Slot, wähle eine Spule und klicke **Setzen**.
@@ -216,9 +223,8 @@ Nimmst du eine Spule aus dem AMS, setzt die Bridge den Lagerort in Spoolman auto
 ## 8. Verbrauchserfassung
 
 - **SV08:** Läuft automatisch über Moonraker (Abschnitt 5).
-- **X2D:** Version 0.1 kümmert sich um **Erkennung, Slot-Einstellung und Lagerort**, bucht aber **noch keinen Verbrauch** ab. Bambu meldet per MQTT keine Gramm pro Slot. Dafür muss die 3MF des Druckauftrags ausgewertet werden, das ist als nächster Ausbauschritt geplant.
-
-  Bis dahin kannst du Restgewichte von Zeit zu Zeit per Waage in Spoolman nachführen.
+- **X2D, Original-Bambu-Spulen:** Das AMS schätzt die Restmenge in Prozent, und die Bridge schreibt sie bei jeder Änderung als Restgewicht in Spoolman. Damit das funktioniert, muss in Bambu Studio bzw. am Drucker in den AMS-Einstellungen die Option zum **Aktualisieren der Restmenge** (Restkapazität schätzen) aktiv sein. Die Genauigkeit liegt bei etwa ±1 %, also rund 10 g pro 1-kg-Spule.
+- **X2D, Fremdspulen mit NFC-Sticker:** Version 0.1 kümmert sich um **Erkennung, Slot-Einstellung und Lagerort**, bucht aber **noch keinen Verbrauch** ab. Für Fremdspulen meldet das AMS keine Restmenge. Dafür muss die 3MF des Druckauftrags ausgewertet werden, das ist als nächster Ausbauschritt geplant. Bis dahin kannst du Restgewichte von Zeit zu Zeit per Waage in Spoolman nachführen.
 
 ---
 
@@ -233,6 +239,8 @@ Nimmst du eine Spule aus dem AMS, setzt die Bridge den Lagerort in Spoolman auto
 | LED rot | `bridge_url` falsch oder Bridge läuft nicht. `http://<NAS-IP>:8099/health` im Browser testen |
 | Log: `Unbekannter Leser` | `reader_id` in ESPHome stimmt nicht mit `readers:` in `config.yaml` überein |
 | Falscher Slot zugeordnet | In den 60 s wurden zwei Spulen gleichzeitig gesteckt. Immer eine nach der anderen, oder im Web-UI korrigieren |
+| Bambu-Spule erscheint nicht in Spoolman | Das AMS hat den RFID-Chip noch nicht gelesen, das dauert nach dem Einstecken einige Sekunden. Am Display muss die Sorte erscheinen. Danach im Log nachsehen |
+| Restmenge einer Bambu-Spule bleibt stehen | Option zum Schätzen der Restmenge in den AMS-Einstellungen aktivieren |
 | Spoolman-Felder fehlen | Die Bridge legt sie beim Start an. Erreicht sie Spoolman nicht, `spoolman_url` prüfen |
 
 ---
