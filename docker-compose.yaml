@@ -1,0 +1,23 @@
+services:
+  spoolman:
+    image: ghcr.io/donkie/spoolman:latest
+    restart: unless-stopped
+    ports:
+      - "7912:8000"
+    volumes:
+      - /mnt/tank/apps/spoolman:/home/app/.local/share/spoolman   # Pfad an deinen Pool anpassen
+    environment:
+      - TZ=Europe/Zurich
+
+  spool-bridge:
+    image: ghcr.io/derbonsaii/spool-bridge:latest
+    restart: unless-stopped
+    depends_on:
+      - spoolman
+    ports:
+      - "8099:8099"
+    volumes:
+      - /mnt/tank/apps/spool-bridge:/config   # enthält config.yaml
+    environment:
+      - TZ=Europe/Zurich
+      - LOG_LEVEL=INFO

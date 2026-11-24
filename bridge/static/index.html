@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>spool-bridge</title>
+<style>
+  :root { --bg:#f6f6f4; --card:#fff; --ink:#1d1d1b; --mute:#6b6b66; --line:#e3e2dd;
+          --ok:#2f7d4f; --warn:#b26b00; --err:#b3261e; --acc:#2557a7; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#151514; --card:#1f1f1d; --ink:#ecebe6; --mute:#9a9992; --line:#34332f; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:960px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:0 0 12px; display:flex; gap:8px; align-items:center; }
+  .sub { color:var(--mute); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .slots { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; }
+  .slot { border:1px solid var(--line); border-radius:8px; padding:10px; min-height:74px; }
+  .slot .n { font-size:12px; color:var(--mute); display:flex; justify-content:space-between; }
+  .sw { width:14px; height:14px; border-radius:3px; border:1px solid var(--line); display:inline-block; vertical-align:-2px; margin-right:6px; }
+  .empty { color:var(--mute); }
+  .armed { background:color-mix(in srgb, var(--acc) 12%, transparent); border-color:var(--acc); padding:8px 10px; border-radius:8px; margin-bottom:12px; }
+  .unknown { border-color:var(--warn); }
+  select, button { font:inherit; padding:6px 10px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
+  button { background:var(--acc); border-color:var(--acc); color:#fff; cursor:pointer; }
+  ul.ev { list-style:none; margin:0; padding:0; }
+  ul.ev li { padding:6px 0; border-top:1px solid var(--line); display:flex; gap:10px; }
+  ul.ev li:first-child { border-top:0; }
+  .t { color:var(--mute); font-variant-numeric:tabular-nums; min-width:64px; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .error { color:var(--err); }
+  .assign { margin-top:6px; display:none; gap:6px; }
+  .slot:hover .assign { display:flex; }
+  .assign select { flex:1; min-width:0; font-size:12px; padding:3px; }
+  .assign button { font-size:12px; padding:3px 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>spool-bridge</h1>
+  <p class="sub">NFC-Spulenerkennung mit Spoolman</p>
+  <div id="unknown"></div>
+  <div id="printers"></div>
+  <div class="card"><h2>Ereignisse</h2><ul class="ev" id="events"></ul></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let spools = [];
+let busy = false;
+
+function spoolOptions() {
+  return '<option value="">Spule wählen…</option>' +
+    spools.map(s => `<option value="${s.id}">${esc(s.label)}</option>`).join("");
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  return r.json().catch(() => ({}));
+}
+
+function render(st) {
+  spools = st.spools;
+  const u = st.unknown;
+  const ukEl = $("#unknown");
+  if (u && !ukEl.dataset.uid) {
+    ukEl.dataset.uid = u.uid;
+    ukEl.innerHTML = `<div class="card unknown"><h2><span class="dot" style="background:var(--warn)"></span>Neuer Tag erkannt</h2>
+      <p>Tag <b>${esc(u.uid)}</b> (Leser ${esc(u.reader)}) ist noch keiner Spule zugeordnet.</p>
+      <select id="linkSel">${spoolOptions()}</select> <button id="linkBtn">Verknüpfen</button></div>`;
+    $("#linkBtn").onclick = async () => {
+      const id = $("#linkSel").value; if (!id) return;
+      await post("/api/link", {uid:u.uid, spool_id:Number(id)});
+      ukEl.dataset.uid = ""; ukEl.innerHTML = ""; refresh();
+    };
+  } else if (!u) { ukEl.dataset.uid = ""; ukEl.innerHTML = ""; }
+
+  $("#printers").innerHTML = st.printers.map(p => {
+    const dot = `<span class="dot" style="background:${p.connected ? "var(--ok)" : "var(--err)"}"></span>`;
+    if (p.type === "moonraker") {
+      return `<div class="card"><h2>${dot}${esc(p.name)} <span class="sub" style="margin:0">Klipper</span></h2>
+        ${p.spool ? esc(p.spool) : '<span class="empty">keine aktive Spule</span>'}</div>`;
+    }
+    const armed = p.armed ? `<div class="armed">Spule #${p.armed} bereit – jetzt in einen Slot stecken</div>` : "";
+    const slots = p.slots.map(s => `<div class="slot">
+        <div class="n"><span>${esc(s.name)}</span><span>${s.occupied ? "belegt" : "leer"}</span></div>
+        ${s.occupied
+          ? `<div>${s.color ? `<span class="sw" style="background:#${esc(s.color)}"></span>` : ""}${esc(s.type || "?")}</div>
+             <div>${s.spool ? esc(s.spool) : '<span class="empty">nicht in Spoolman zugeordnet</span>'}</div>
+             <div class="assign"><select data-p="${esc(p.name)}" data-a="${s.ams_id}" data-s="${s.slot}">${spoolOptions()}</select><button>Setzen</button></div>`
+          : '<div class="empty">–</div>'}
+      </div>`).join("");
+    return `<div class="card"><h2>${dot}${esc(p.name)} <span class="sub" style="margin:0">${p.connected ? "verbunden" : "nicht verbunden"}</span></h2>${armed}
+      <div class="slots">${slots || '<span class="empty">Noch keine AMS-Daten</span>'}</div></div>`;
+  }).join("");
+
+  document.querySelectorAll(".assign button").forEach(b => b.onclick = async () => {
+    const sel = b.previousElementSibling; if (!sel.value) return;
+    busy = true;
+    await post("/api/assign", {printer:sel.dataset.p, ams_id:Number(sel.dataset.a), slot:Number(sel.dataset.s), spool_id:Number(sel.value)});
+    busy = false; refresh();
+  });
+
+  $("#events").innerHTML = st.events.map(e =>
+    `<li><span class="t">${new Date(e.t*1000).toLocaleTimeString("de-CH")}</span><span class="${e.level}">${esc(e.text)}</span></li>`
+  ).join("") || '<li class="empty">Noch nichts passiert</li>';
+}
+
+async function refresh() {
+  if (busy || document.querySelector(".assign select:focus, #linkSel:focus")) return;
+  try { render(await (await fetch("/api/state")).json()); } catch (e) {}
+}
+refresh(); setInterval(refresh, 2500);
+</script>
+</body>
+</html>

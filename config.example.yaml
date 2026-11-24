@@ -1,0 +1,32 @@
+# spool-bridge Konfiguration
+# Kopieren nach config/config.yaml und Werte anpassen.
+
+# Adresse deiner Spoolman-Instanz (ohne /api)
+spoolman_url: http://truenas.local:7912
+
+# Lagerort in Spoolman für Spulen, die aus einem Drucker genommen werden
+storage_location: Lager
+
+# So lange (Sekunden) wartet die Bridge nach dem Scan auf das Einstecken in einen AMS-Slot
+window_seconds: 60
+
+# Port für Web-UI und Leser-API
+port: 8099
+
+printers:
+  x2d:
+    type: bambu
+    host: 192.168.1.50          # IP des X2D (am besten fest im Router vergeben)
+    serial: "0XXXXXXXXXXXXXX"   # Seriennummer (Display: Einstellungen > Gerät)
+    access_code: "12345678"     # Zugangscode (Display: Einstellungen > Netzwerk/LAN)
+    location: X2D               # Lagerort-Präfix in Spoolman -> "X2D AMS A3"
+
+  sv08:
+    type: moonraker
+    url: http://sv08.local:7125 # Moonraker-Adresse des SV08
+    location: SV08
+
+# Welcher NFC-Leser gehört zu welchem Drucker (reader_id aus der ESPHome-Datei)
+readers:
+  x2d: x2d
+  sv08: sv08
