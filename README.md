@@ -37,7 +37,7 @@ NFC-Spulenerkennung für **Bambu Lab X2D** (AMS) und **Klipper/Moonraker (Sovol 
 
 | Teil | Pro | Bemerkung |
 |---|---|---|
-| ESP32-S3 DevKitC-1 (z. B. diymore N16R8) | Leser | ein Leser pro Drucker |
+| ESP32-S3 DevKitC-1 **oder** ESP32-WROOM-32 DevKit | Leser | ein Leser pro Drucker. Beide funktionieren gleich, weil die Slot-Erkennung in der Bridge läuft |
 | PN532-Modul (z. B. Binghe/Elechouse V3) | Leser | wird im SPI-Modus betrieben |
 | 6 Dupont-Kabel | Leser | |
 | NFC-Sticker **NTAG215** (oder 213/216) | Spule | 1 pro Spule, auf die Flanke kleben |
@@ -105,6 +105,13 @@ Läuft Spoolman bei dir schon, lässt du den `spoolman`-Block weg und trägst be
 
 ## 4. NFC-Leser bauen und flashen
 
+Es gibt zwei Firmware-Varianten:
+
+| Board | Datei | Rückmeldung |
+|---|---|---|
+| ESP32-S3 DevKitC-1 | `esphome/spool-reader.yaml` | RGB-LED (Farben) |
+| ESP32-WROOM-32 DevKit | `esphome/spool-reader-wroom32.yaml` | blaue Onboard-LED (Blinkmuster) |
+
 ### 4.1 Verdrahtung (PN532 → ESP32-S3 DevKitC-1)
 
 | PN532 | ESP32-S3 |
@@ -116,16 +123,27 @@ Läuft Spoolman bei dir schon, lässt du den `spoolman`-Block weg und trägst be
 | MOSI | GPIO11 |
 | SS / NSS | GPIO10 |
 
+**Verdrahtung PN532 → ESP32-WROOM-32 DevKit:**
+
+| PN532 | ESP32-WROOM-32 |
+|---|---|
+| VCC | 3V3 |
+| GND | GND |
+| SCK | GPIO18 |
+| MISO | GPIO19 |
+| MOSI | GPIO23 |
+| SS / NSS | GPIO5 |
+
 **DIP-Schalter am PN532 auf SPI stellen.** Beim Elechouse-/Binghe-V3 ist das meist *Schalter 1 = OFF, Schalter 2 = ON*. Schau trotzdem auf den Aufdruck auf der Platine, das ist die häufigste Fehlerquelle.
 
 ### 4.2 Firmware
 
-1. In ESPHome **New Device → Skip** wählen, dann den Inhalt von [`esphome/spool-reader.yaml`](esphome/spool-reader.yaml) einfügen.
+1. In ESPHome **New Device → Skip** wählen, dann den Inhalt der passenden Datei einfügen: [`spool-reader.yaml`](esphome/spool-reader.yaml) für den S3 oder [`spool-reader-wroom32.yaml`](esphome/spool-reader-wroom32.yaml) für den WROOM-32.
 2. Die `substitutions` anpassen:
    - `name`: z. B. `spool-reader-x2d` bzw. `spool-reader-sv08`
    - `reader_id`: `x2d` bzw. `sv08`, passend zu `readers:` in `config.yaml`
    - `bridge_url`: `http://<NAS-IP>:8099/api/scan`
-   - `led_pin`: `GPIO48`. Leuchtet die LED nicht, probierst du `GPIO38`, das hängt von der Board-Revision ab.
+   - `led_pin`: S3 `GPIO48`, oder `GPIO38`, falls die LED nicht leuchtet (hängt von der Board-Revision ab). WROOM-32 `GPIO2`.
 3. Unter *Secrets* `wifi_ssid` und `wifi_password` setzen.
 4. Den ersten Flash per USB machen, danach geht es per OTA.
 
@@ -133,12 +151,22 @@ Für den zweiten Leser kopierst du die Datei und änderst nur `name` und `reader
 
 ### 4.3 LED-Rückmeldung
 
+**ESP32-S3 (RGB-LED):**
+
 | Farbe | Bedeutung |
 |---|---|
 | weiss (kurz) | Tag gelesen, Anfrage läuft |
 | grün | Spule erkannt. Am X2D: jetzt einstecken. Am SV08: aktiv gesetzt |
 | gelb | unbekannter Tag, im Web-UI einer Spule zuweisen |
 | rot | Fehler (Bridge nicht erreichbar o. ä.) |
+
+**ESP32-WROOM-32 (blaue LED):**
+
+| Muster | Bedeutung |
+|---|---|
+| 1× lang | Spule erkannt |
+| 2× kurz | unbekannter Tag, im Web-UI zuweisen |
+| 5× schnell | Fehler |
 
 ### 4.4 Platzierung
 

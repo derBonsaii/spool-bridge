@@ -31,6 +31,8 @@ wifi:
   ap:
     ssid: ${name}
 
+captive_portal:
+
 http_request:
   verify_ssl: false
   timeout: 10s

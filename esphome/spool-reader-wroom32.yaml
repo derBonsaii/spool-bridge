@@ -1,0 +1,118 @@
+# ESPHome-Firmware für einen NFC-Leser mit ESP32-WROOM-32 (klassisches DevKit / NodeMCU-32S)
+# + PN532 im SPI-Modus. Funktioniert genauso wie die ESP32-S3-Variante: der Leser schickt
+# nur die Tag-UID an die Bridge, die Slot-Erkennung macht die Bridge.
+#
+# Verdrahtung PN532 -> ESP32-WROOM-32 DevKit (VSPI):
+#   VCC -> 3V3   GND -> GND
+#   SCK -> GPIO18   MISO -> GPIO19   MOSI -> GPIO23   SS/CS -> GPIO5
+# PN532-DIP-Schalter auf SPI stellen (meist: Schalter 1 = OFF, Schalter 2 = ON – Aufdruck prüfen).
+#
+# Rückmeldung über die blaue Onboard-LED (GPIO2):
+#   1x lang   = Spule erkannt (X2D: jetzt einstecken / SV08: aktiv gesetzt)
+#   2x kurz   = unbekannter Tag -> im Web-UI zuweisen
+#   5x schnell = Fehler (Bridge nicht erreichbar o.ä.)
+
+substitutions:
+  name: spool-reader-x2d      # Gerätename im Netz
+  reader_id: x2d              # muss in config.yaml unter readers stehen
+  bridge_url: http://truenas.local:8099/api/scan
+  led_pin: GPIO2              # Onboard-LED der meisten WROOM-32-DevKits
+
+esphome:
+  name: ${name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+api:
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${name}
+
+captive_portal:
+
+http_request:
+  verify_ssl: false
+  timeout: 10s
+
+spi:
+  clk_pin: GPIO18
+  miso_pin: GPIO19
+  mosi_pin: GPIO23
+
+output:
+  - platform: gpio
+    pin: ${led_pin}
+    id: led_out
+
+light:
+  - platform: binary
+    id: status_led
+    output: led_out
+
+script:
+  - id: blink_ok
+    mode: restart
+    then:
+      - light.turn_on: status_led
+      - delay: 1500ms
+      - light.turn_off: status_led
+  - id: blink_unknown
+    mode: restart
+    then:
+      - repeat:
+          count: 2
+          then:
+            - light.turn_on: status_led
+            - delay: 200ms
+            - light.turn_off: status_led
+            - delay: 200ms
+  - id: blink_error
+    mode: restart
+    then:
+      - repeat:
+          count: 5
+          then:
+            - light.turn_on: status_led
+            - delay: 80ms
+            - light.turn_off: status_led
+            - delay: 80ms
+
+pn532_spi:
+  cs_pin: GPIO5
+  update_interval: 500ms
+  on_tag:
+    then:
+      - http_request.post:
+          url: ${bridge_url}
+          request_headers:
+            Content-Type: application/json
+          json:
+            reader: ${reader_id}
+            uid: !lambda return x;
+          on_response:
+            then:
+              - if:
+                  condition:
+                    lambda: return response->status_code == 200;
+                  then:
+                    - script.execute: blink_ok
+                  else:
+                    - if:
+                        condition:
+                          lambda: return response->status_code == 404;
+                        then:
+                          - script.execute: blink_unknown
+                        else:
+                          - script.execute: blink_error
+          on_error:
+            then:
+              - script.execute: blink_error
