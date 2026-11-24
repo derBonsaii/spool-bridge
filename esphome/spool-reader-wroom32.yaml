@@ -1,11 +1,14 @@
 # ESPHome-Firmware für einen NFC-Leser mit ESP32-WROOM-32 (klassisches DevKit / NodeMCU-32S)
-# + PN532 im SPI-Modus. Funktioniert genauso wie die ESP32-S3-Variante: der Leser schickt
-# nur die Tag-UID an die Bridge, die Slot-Erkennung macht die Bridge.
+# + PN532 über I2C (4-poliger Anschluss GND / VCC / TXD / RXD am PN532-Modul).
+# Der Leser schickt nur die Tag-UID an die Bridge, die Slot-Erkennung macht die Bridge.
 #
-# Verdrahtung PN532 -> ESP32-WROOM-32 DevKit (VSPI):
-#   VCC -> 3V3   GND -> GND
-#   SCK -> GPIO18   MISO -> GPIO19   MOSI -> GPIO23   SS/CS -> GPIO5
-# PN532-DIP-Schalter auf SPI stellen (meist: Schalter 1 = OFF, Schalter 2 = ON – Aufdruck prüfen).
+# Verdrahtung PN532 (4-Pin-Header) -> ESP32-WROOM-32 DevKit:
+#   GND        -> GND
+#   VCC        -> 3V3
+#   TXD (=SDA) -> GPIO21
+#   RXD (=SCL) -> GPIO22
+# PN532-DIP-Schalter auf I2C stellen: Schalter 1 = ON, Schalter 2 = OFF (Aufdruck prüfen).
+# Danach den PN532 einmal stromlos machen, er liest den Modus nur beim Einschalten.
 #
 # Rückmeldung über die blaue Onboard-LED (GPIO2):
 #   1x lang   = Spule erkannt (X2D: jetzt einstecken / SV08: aktiv gesetzt)
@@ -43,10 +46,11 @@ http_request:
   verify_ssl: false
   timeout: 10s
 
-spi:
-  clk_pin: GPIO18
-  miso_pin: GPIO19
-  mosi_pin: GPIO23
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true          # im ESPHome-Log muss ein Gerät auf 0x24 erscheinen
+  frequency: 100kHz
 
 output:
   - platform: gpio
@@ -86,8 +90,7 @@ script:
             - light.turn_off: status_led
             - delay: 80ms
 
-pn532_spi:
-  cs_pin: GPIO5
+pn532_i2c:
   update_interval: 500ms
   on_tag:
     then:

@@ -110,7 +110,7 @@ Es gibt zwei Firmware-Varianten:
 | Board | Datei | Rückmeldung |
 |---|---|---|
 | ESP32-S3 DevKitC-1 | `esphome/spool-reader.yaml` | RGB-LED (Farben) |
-| ESP32-WROOM-32 DevKit | `esphome/spool-reader-wroom32.yaml` | blaue Onboard-LED (Blinkmuster) |
+| ESP32-WROOM-32 DevKit | `esphome/spool-reader-wroom32.yaml` | blaue Onboard-LED (Blinkmuster), PN532 über **I2C** |
 
 ### 4.1 Verdrahtung (PN532 → ESP32-S3 DevKitC-1)
 
@@ -123,18 +123,20 @@ Es gibt zwei Firmware-Varianten:
 | MOSI | GPIO11 |
 | SS / NSS | GPIO10 |
 
-**Verdrahtung PN532 → ESP32-WROOM-32 DevKit:**
+**Verdrahtung PN532 → ESP32-WROOM-32 DevKit (I2C, 4-poliger Anschluss):**
+
+Viele PN532-Module haben nur einen 4-Pin-Header mit GND / VCC / TXD / RXD. Die WROOM-Variante nutzt deshalb I2C, dabei dient TXD als SDA und RXD als SCL.
 
 | PN532 | ESP32-WROOM-32 |
 |---|---|
-| VCC | 3V3 |
 | GND | GND |
-| SCK | GPIO18 |
-| MISO | GPIO19 |
-| MOSI | GPIO23 |
-| SS / NSS | GPIO5 |
+| VCC | 3V3 |
+| TXD (= SDA) | GPIO21 |
+| RXD (= SCL) | GPIO22 |
 
-**DIP-Schalter am PN532 auf SPI stellen.** Beim Elechouse-/Binghe-V3 ist das meist *Schalter 1 = OFF, Schalter 2 = ON*. Schau trotzdem auf den Aufdruck auf der Platine, das ist die häufigste Fehlerquelle.
+**DIP-Schalter am PN532 für I2C:** Schalter 1 = ON, Schalter 2 = OFF. Danach das Modul einmal stromlos machen. Im ESPHome-Log muss beim Start `Found i2c device at address 0x24` erscheinen.
+
+**Für die S3-Variante (SPI):** Beim Elechouse-/Binghe-V3 ist das meist *Schalter 1 = OFF, Schalter 2 = ON*. Schau trotzdem auf den Aufdruck auf der Platine, das ist die häufigste Fehlerquelle.
 
 ### 4.2 Firmware
 
@@ -263,7 +265,7 @@ Spulen, die beim Start der Bridge schon im AMS stecken, werden ebenfalls erfasst
 | X2D im Web-UI rot, Log: `MQTT-Verbindung abgelehnt` | Access-Code falsch oder Developer-Modus aus (Schritt 2) |
 | X2D rot, keine Log-Meldung | falsche IP oder Drucker aus. `host` prüfen |
 | Log: `Befehl gesendet, aber keine Bestätigung` | Der Drucker hat die Slot-Einstellung nicht übernommen. Slot am Display prüfen, LOG_LEVEL=DEBUG setzen und Log anschauen (siehe Abschnitt 10) |
-| LED bleibt aus beim Scan | PN532 nicht im SPI-Modus oder Verdrahtung falsch. ESPHome-Log zeigt `PN532 not found` |
+| LED bleibt aus beim Scan | PN532 im falschen Modus (DIP-Schalter, danach stromlos machen) oder Verdrahtung falsch. ESPHome-Log zeigt `PN532 not found`. Bei I2C: Erscheint im Log kein Gerät auf 0x24, SDA/SCL tauschen bzw. Kabel prüfen |
 | LED rot | `bridge_url` falsch oder Bridge läuft nicht. `http://<NAS-IP>:8099/health` im Browser testen |
 | Log: `Unbekannter Leser` | `reader_id` in ESPHome stimmt nicht mit `readers:` in `config.yaml` überein |
 | Falscher Slot zugeordnet | In den 60 s wurden zwei Spulen gleichzeitig gesteckt. Immer eine nach der anderen, oder im Web-UI korrigieren |
