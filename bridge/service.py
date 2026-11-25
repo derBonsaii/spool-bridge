@@ -73,6 +73,12 @@ class Bridge:
         base = self.cfg.printers[printer_name].location
         return f"{base} {slot_name(slot)}" if slot is not None else base
 
+    def _is_printer_location(self, location: str) -> bool:
+        for p in self.cfg.printers.values():
+            if location == p.location or location.startswith(p.location + " "):
+                return True
+        return False
+
     async def cached_spools(self, max_age: float = 5.0) -> list:
         ts, spools = self._spool_cache
         if self.clock() - ts > max_age:
@@ -154,7 +160,7 @@ class Bridge:
         await self.moonraker[printer].set_active_spool(spool["id"])
         loc = self._location(printer)
         await self.spoolman.move_all(loc, self.cfg.storage_location, except_id=spool["id"])
-        await self.spoolman.set_location(spool["id"], loc)
+        await self.spoolman.place(spool, loc, self._is_printer_location)
         self._invalidate()
         self.event("ok", f"{printer}: aktive Spule {spool_label(spool)}")
 
@@ -213,7 +219,7 @@ class Bridge:
             # RFID-Kennung des gelesenen Chips merken -> Spule ist am Leser/an der Waage erkennbar
             await self.spoolman.link_uid(spool["id"], info["tag_uid"])
         await self.spoolman.move_all(loc, self.cfg.storage_location, except_id=spool["id"])
-        await self.spoolman.set_location(spool["id"], loc)
+        await self.spoolman.place(spool, loc, self._is_printer_location)
         self._invalidate()
         entry = self._rfid.get(printer, {}).get(slot)
         if entry and entry["uuid"] == info["uuid"]:
@@ -232,7 +238,7 @@ class Bridge:
         p.set_tray(slot, setting)
         loc = self._location(printer, slot)
         await self.spoolman.move_all(loc, self.cfg.storage_location, except_id=spool["id"])
-        await self.spoolman.set_location(spool["id"], loc)
+        await self.spoolman.place(spool, loc, self._is_printer_location)
         self._invalidate()
         ok = await p.verify_tray(slot, setting)
         if ok:

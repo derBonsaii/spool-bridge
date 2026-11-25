@@ -289,7 +289,7 @@ Willst du ein bestimmtes Preset, etwa ein Bambu-Original oder ein eigenes Cloud-
 
 Die umgekehrte Reihenfolge geht auch: zuerst einstecken, dann innerhalb von 60 s scannen.
 
-Nimmst du eine Spule aus dem AMS, setzt die Bridge den Lagerort in Spoolman automatisch zurück auf `Lager`.
+Nimmst du eine Spule aus dem AMS, stellt die Bridge sie in Spoolman an ihren **Stammplatz** zurück. Das ist der Ort, an dem sie vor dem Einstecken war, z. B. `PLA`. Die Bridge merkt ihn sich im Extra-Feld *Stammplatz*. Hatte die Spule keinen Ort, kommt sie nach `storage_location` (Standard: `Lager`).
 
 **Original-Bambu-Spulen (RFID):** Einfach ins AMS stecken, nicht scannen. Sobald das AMS den RFID-Chip gelesen hat, passiert Folgendes:
 - Die Bridge sucht die Spule in Spoolman über ihre eindeutige Bambu-Spulen-UUID (Extra-Feld *Bambu Spulen-UUID*).

@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 NFC_FIELD = "nfc_id"
 BAMBU_IDX_FIELD = "bambu_idx"
 BAMBU_UUID_FIELD = "bambu_uuid"
+HOME_FIELD = "home_location"
 BAMBU_VENDOR = "Bambu Lab"
 
 
@@ -68,7 +69,8 @@ class Spoolman:
     async def ensure_fields(self) -> None:
         """Legt die benötigten Extra-Felder an, falls sie fehlen."""
         wanted = {
-            "spool": {NFC_FIELD: "NFC Tag", BAMBU_UUID_FIELD: "Bambu Spulen-UUID"},
+            "spool": {NFC_FIELD: "NFC Tag", BAMBU_UUID_FIELD: "Bambu Spulen-UUID",
+                      HOME_FIELD: "Stammplatz"},
             "filament": {BAMBU_IDX_FIELD: "Bambu Filament-ID"},
         }
         for entity, fields in wanted.items():
@@ -176,10 +178,24 @@ class Spoolman:
             body["remaining_weight"] = round(remaining, 1)
         return await self._req("POST", "/spool", json=body)
 
-    async def move_all(self, from_location: str, to_location: str, except_id: int | None = None) -> None:
+    async def place(self, spool: dict, location: str, is_printer_location) -> None:
+        """Spule an einen Drucker-Ort setzen und den bisherigen Ort als Stammplatz merken."""
+        current = (spool.get("location") or "").strip()
+        if current == location:
+            return
+        body: dict = {"location": location}
+        if current and not is_printer_location(current):
+            extra = dict(spool.get("extra") or {})
+            extra[HOME_FIELD] = json.dumps(current)
+            body["extra"] = extra
+        await self._req("PATCH", f"/spool/{spool['id']}", json=body)
+
+    async def move_all(self, from_location: str, fallback: str, except_id: int | None = None) -> None:
+        """Alle Spulen an from_location zurück an ihren Stammplatz (sonst fallback)."""
         for s in await self.spools():
             if s.get("location") == from_location and s["id"] != except_id:
-                await self.set_location(s["id"], to_location)
+                home = _decode_extra((s.get("extra") or {}).get(HOME_FIELD))
+                await self.set_location(s["id"], str(home).strip() if home else fallback)
 
 
 def spool_label(spool: dict) -> str:

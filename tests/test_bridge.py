@@ -213,7 +213,7 @@ async def _settle(bridge):
 
 async def test_end_to_end_scan_insert(env):
     fake, bridge, printer, clock = env
-    assert {f["key"] for f in fake.fields["spool"]} == {"nfc_id", "bambu_uuid"}
+    assert {f["key"] for f in fake.fields["spool"]} == {"nfc_id", "bambu_uuid", "home_location"}
 
     empty = [{"id": str(i)} for i in range(4)]
     printer.report({"ams": [{"id": "0", "tray": empty}], "tray_exist_bits": "0"})
@@ -405,3 +405,22 @@ def test_labels_without_id_and_vendor():
     assert spool_choice_label(sp) == "PLA Matte Dark Brown (Bambu Lab, 645 g, Lager)"
     sp["filament"]["name"] = "PLA Matte"
     assert spool_label(sp) == "PLA Matte"
+
+
+async def test_spool_returns_to_home_location(env):
+    fake, bridge, printer, clock = env
+    fake.spools[1]["location"] = "PLA"
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    await bridge.handle_scan("x2d", "04A1B2C3")
+    clock["t"] = 3
+    printer.report({"tray_exist_bits": "1"})
+    await _settle(bridge)
+    assert fake.spools[1]["location"] == "X2D AMS A1"
+    assert json.loads(fake.spools[1]["extra"]["home_location"]) == "PLA"
+
+    # umstecken in anderen Slot ändert den Stammplatz nicht
+    clock["t"] = 10
+    printer.report({"tray_exist_bits": "0"})
+    await _settle(bridge)
+    assert fake.spools[1]["location"] == "PLA"  # zurück an den Stammplatz, nicht "Lager"

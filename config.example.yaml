@@ -4,7 +4,8 @@
 # Adresse deiner Spoolman-Instanz (ohne /api)
 spoolman_url: http://truenas.local:7912
 
-# Lagerort in Spoolman für Spulen, die aus einem Drucker genommen werden
+# Lagerort für Spulen ohne Stammplatz, wenn sie aus einem Drucker genommen werden
+# (sonst kehren sie an den Ort zurück, an dem sie vor dem Einstecken waren)
 storage_location: Lager
 
 # So lange (Sekunden) wartet die Bridge nach dem Scan auf das Einstecken in einen AMS-Slot
