@@ -70,10 +70,14 @@ function render(st) {
     ukEl.dataset.uid = u.uid;
     ukEl.innerHTML = `<div class="card unknown"><h2><span class="dot" style="background:var(--warn)"></span>Neuer Tag erkannt</h2>
       <p>Tag <b>${esc(u.uid)}</b> (Leser ${esc(u.reader)}) ist noch keiner Spule zugeordnet.</p>
-      <select id="linkSel">${spoolOptions()}</select> <button id="linkBtn">Verknüpfen</button></div>`;
+      <select id="linkSel"><option value="">Spule oder Filament wählen…</option>
+        <optgroup label="Neue Spule anlegen aus Filament">${(st.filaments||[]).map(f => `<option value="f:${f.id}">${esc(f.label)}</option>`).join("")}</optgroup>
+        <optgroup label="Bestehende Spule">${spools.map(s => `<option value="s:${s.id}">${esc(s.label)}</option>`).join("")}</optgroup>
+      </select> <button id="linkBtn">Verknüpfen</button></div>`;
     $("#linkBtn").onclick = async () => {
-      const id = $("#linkSel").value; if (!id) return;
-      await post("/api/link", {uid:u.uid, spool_id:Number(id)});
+      const v = $("#linkSel").value; if (!v) return;
+      const [kind, id] = v.split(":");
+      await post("/api/link", kind === "f" ? {uid:u.uid, filament_id:Number(id)} : {uid:u.uid, spool_id:Number(id)});
       ukEl.dataset.uid = ""; ukEl.innerHTML = ""; refresh();
     };
   } else if (!u) { ukEl.dataset.uid = ""; ukEl.innerHTML = ""; }

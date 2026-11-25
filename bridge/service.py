@@ -13,7 +13,7 @@ from .config import Config
 from .detector import SlotDetector
 from .filament import bambu_spool_info, tray_setting
 from .moonraker import Moonraker
-from .spoolman import Spoolman, empty_spool_weight, normalize_uid, spool_choice_label, spool_label
+from .spoolman import Spoolman, empty_spool_weight, filament_label, normalize_uid, spool_choice_label, spool_label
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ class Bridge:
         self.unknown: Optional[dict] = None
         self._tasks: set = set()
         self._spool_cache: tuple[float, list] = (0.0, [])
+        self._filament_cache: tuple[float, list] = (0.0, [])
         self._rfid: dict[str, dict] = {}  # printer -> slot -> {uuid, spool_id, remain}
 
     # ------------------------------------------------------------ Setup
@@ -86,8 +87,16 @@ class Bridge:
             self._spool_cache = (self.clock(), spools)
         return spools
 
+    async def cached_filaments(self, max_age: float = 30.0) -> list:
+        ts, fil = self._filament_cache
+        if self.clock() - ts > max_age or not fil:
+            fil = await self.spoolman.filaments()
+            self._filament_cache = (self.clock(), fil)
+        return fil
+
     def _invalidate(self) -> None:
         self._spool_cache = (0.0, [])
+        self._filament_cache = (0.0, [])
 
     # ------------------------------------------------------------ Scan
     async def handle_scan(self, reader: str, uid: str, weight: Optional[float] = None) -> dict:
@@ -127,7 +136,14 @@ class Bridge:
                            f"({int(self.cfg.window_seconds)} s)")
         return {"result": "armed", "spool": label, **info}
 
-    async def link_tag(self, uid: str, spool_id: int) -> dict:
+    async def link_tag(self, uid: str, spool_id: Optional[int] = None,
+                       filament_id: Optional[int] = None) -> dict:
+        if spool_id is None:
+            if filament_id is None:
+                raise ValueError("spool_id oder filament_id nötig")
+            spool = await self.spoolman.create_spool(filament_id, self.cfg.storage_location)
+            spool_id = spool["id"]
+            self.event("ok", f"Neue Spule {spool_label(spool)} angelegt")
         await self.spoolman.link_uid(spool_id, uid)
         self._invalidate()
         spool = await self.spoolman.spool(spool_id)
@@ -257,8 +273,9 @@ class Bridge:
     async def state(self) -> dict:
         try:
             spools = await self.cached_spools()
+            filaments = await self.cached_filaments() if self.unknown else []
         except Exception as e:  # Spoolman nicht erreichbar
-            spools = []
+            spools, filaments = [], []
             log.warning("Spoolman nicht erreichbar: %s", e)
         by_loc = {s.get("location"): spool_label(s) for s in spools if s.get("location")}
         by_id = {s["id"]: spool_label(s) for s in spools}
@@ -290,6 +307,8 @@ class Bridge:
             "printers": printers,
             "events": list(self.events),
             "unknown": self.unknown,
+            "filaments": sorted(({"id": f["id"], "label": filament_label(f)} for f in filaments),
+                                key=lambda x: x["label"].lower()),
             "spools": sorted(({"id": s["id"], "label": spool_choice_label(s)} for s in spools),
                              key=lambda x: x["label"].lower()),
         }

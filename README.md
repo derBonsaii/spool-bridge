@@ -249,6 +249,16 @@ Die Bridge setzt die aktive Spule über `POST /server/spoolman/spool_id`, sobald
 
 ## 6. Spulen erfassen und Tags verknüpfen
 
+### Empfohlen: Filamente aus der SpoolmanDB
+
+Spoolman kann Filamente aus der Community-Datenbank **SpoolmanDB** übernehmen, mit Name, Farbe, Dichte, Gewicht und **Leergewicht der Spule**. Das Leergewicht braucht die Waage. Beim Anlegen eines Filaments in Spoolman wählst du dafür «Aus externer Datenbank importieren».
+
+Danach brauchst du **keine Spulen von Hand anzulegen**:
+- **Fremdspule mit Sticker:** Beim ersten Scan erscheint auf der Statusseite «Neuer Tag erkannt». Unter **«Neue Spule anlegen aus Filament»** wählst du das Filament und klickst auf **Verknüpfen**. Die Bridge legt die Spule an, hängt den Tag an und übernimmt, falls die Spule auf der Waage lag, gleich das Restgewicht.
+- **Bambu-Spule:** Einfach ins AMS stecken. Die Bridge sucht unter «Bambu Lab» das passende Filament: gleiches Material, Produktlinie im Namen (z. B. «Matte»), ähnlichste Farbe. Sie trägt dort die Bambu-ID ein und legt die Spule an. Nur wenn nichts passt, legt sie ein neues Filament an.
+
+### Von Hand
+
 1. **In Spoolman Hersteller und Filamente anlegen** (Material, Farbe, Düsentemperatur, Dichte, Gewicht). Die Felder **Material**, **Farbe** und **Extruder-Temperatur** nutzt die Bridge für die AMS-Einstellung.
 2. **Spulen anlegen** (Ausgangsgewicht/Restgewicht, Lagerort `Lager`).
 3. **Sticker aufkleben**, am besten auf die Aussenseite der Flanke.

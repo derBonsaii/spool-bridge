@@ -23,6 +23,50 @@ def normalize_uid(uid: str) -> str:
     return re.sub(r"[^0-9A-Fa-f]", "", uid or "").upper()
 
 
+def color_distance(a: str, b: str) -> float:
+    try:
+        ra, rb = bytes.fromhex((a or "")[:6]), bytes.fromhex((b or "")[:6])
+    except ValueError:
+        return 999.0
+    if len(ra) != 3 or len(rb) != 3:
+        return 999.0
+    return sum((x - y) ** 2 for x, y in zip(ra, rb)) ** 0.5
+
+
+def match_bambu_filament(candidates: list[dict], info: dict) -> Optional[dict]:
+    """Bestehendes Bambu-Filament ohne Bambu-ID zur RFID-Spule finden (z.B. aus SpoolmanDB)."""
+    material = (info.get("material") or "").upper()
+    line = (info.get("name") or "").lower()
+    if line == material.lower():
+        line = ""
+    scored = []
+    for f in candidates:
+        idx = _decode_extra((f.get("extra") or {}).get(BAMBU_IDX_FIELD))
+        if idx and idx != info.get("idx"):
+            continue  # gehört zu einer anderen Bambu-Sorte
+        if (f.get("material") or "").upper() != material:
+            continue
+        d = color_distance(f.get("color_hex"), info.get("color_hex"))
+        line_ok = not line or line in (f.get("name") or "").lower()
+        scored.append((d, line_ok, f))
+    with_line = sorted((x for x in scored if x[1] and x[0] <= 60), key=lambda x: x[0])
+    if with_line:
+        return with_line[0][2]
+    # Produktlinie fehlt im Namen: nur bei nahezu identischer, eindeutiger Farbe übernehmen
+    close = [x for x in scored if x[0] <= 12]
+    return close[0][2] if len(close) == 1 else None
+
+
+def filament_label(f: dict) -> str:
+    vendor = (f.get("vendor") or {}).get("name", "")
+    material = (f.get("material") or "").strip()
+    name = (f.get("name") or "").strip()
+    if material and name.upper().startswith(material.upper()):
+        material = ""
+    text = " ".join(p for p in (material, name) if p)
+    return f"{text} ({vendor})" if vendor else text
+
+
 def uid_matches(a: str, b: str) -> bool:
     """Vergleicht zwei Tag-UIDs. Toleriert mit Nullen aufgefüllte UIDs (Bambu meldet
     z.B. '4D3E2A1B00000000', der PN532 liest '4D3E2A1B')."""
@@ -143,12 +187,24 @@ class Spoolman:
     async def find_or_create_bambu_filament(self, info: dict) -> dict:
         """info: name, material, color_hex, idx, weight, diameter, density, extruder_temp, bed_temp"""
         vendor_id = await self._bambu_vendor_id()
-        for f in await self._req("GET", "/filament"):
-            if (f.get("vendor") or {}).get("id") != vendor_id:
-                continue
+        bambu = [f for f in await self.filaments()
+                 if (f.get("vendor") or {}).get("id") == vendor_id]
+        for f in bambu:
             idx = _decode_extra((f.get("extra") or {}).get(BAMBU_IDX_FIELD))
             if idx == info["idx"] and (f.get("color_hex") or "").upper() == info["color_hex"]:
                 return f
+
+        # Filament z.B. aus der SpoolmanDB übernommen: hat keine Bambu-ID, Farbcode kann leicht
+        # abweichen. Passend = gleiches Material, Produktlinie im Namen, ähnlichste Farbe.
+        match = match_bambu_filament(bambu, info)
+        if match is not None:
+            extra = dict(match.get("extra") or {})
+            extra[BAMBU_IDX_FIELD] = json.dumps(info["idx"])
+            await self._req("PATCH", f"/filament/{match['id']}", json={"extra": extra})
+            match["extra"] = extra
+            log.info("Spoolman: Bambu-Spule dem Filament '%s' zugeordnet", match.get("name"))
+            return match
+
         body = {
             "name": info["name"],
             "vendor_id": vendor_id,
@@ -166,6 +222,15 @@ class Spoolman:
         f = await self._req("POST", "/filament", json=body)
         log.info("Spoolman: Filament '%s' #%s angelegt", info["name"], info["color_hex"])
         return f
+
+    async def filaments(self) -> list[dict]:
+        return await self._req("GET", "/filament")
+
+    async def create_spool(self, filament_id: int, location: str = "") -> dict:
+        body: dict = {"filament_id": filament_id}
+        if location:
+            body["location"] = location
+        return await self._req("POST", "/spool", json=body)
 
     async def create_bambu_spool(self, filament_id: int, uuid: str, location: str,
                                  remaining: Optional[float]) -> dict:

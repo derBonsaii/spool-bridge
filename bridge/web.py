@@ -43,7 +43,11 @@ def make_app(bridge: Bridge) -> web.Application:
 
     async def link(request):
         data = await request.json()
-        res = await bridge.link_tag(str(data["uid"]), int(data["spool_id"]))
+        spool_id = int(data["spool_id"]) if data.get("spool_id") else None
+        filament_id = int(data["filament_id"]) if data.get("filament_id") else None
+        if spool_id is None and filament_id is None:
+            return web.json_response({"result": "error", "message": "spool_id oder filament_id nötig"}, status=400)
+        res = await bridge.link_tag(str(data["uid"]), spool_id, filament_id)
         return web.json_response(res)
 
     async def assign(request):

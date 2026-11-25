@@ -143,11 +143,18 @@ class FakeSpoolman:
 
         async def add_spool(r):
             body = await r.json()
-            fil = next(f for f in self.filaments if f["id"] == body.pop("filament_id"))
+            fid = body.pop("filament_id")
+            fil = next(f for f in self.filaments if f["id"] == fid)
             sid = max(self.spools) + 1
             self.spools[sid] = {"id": sid, "filament": fil, **body}
             return web.json_response(self.spools[sid])
 
+        async def patch_filament(r):
+            f = next(f for f in self.filaments if f["id"] == int(r.match_info["id"]))
+            f.update(await r.json())
+            return web.json_response(f)
+
+        a.router.add_patch("/api/v1/filament/{id}", patch_filament)
         a.router.add_get("/api/v1/vendor", list_vendors)
         a.router.add_post("/api/v1/vendor", add_vendor)
         a.router.add_get("/api/v1/filament", list_filaments)
@@ -424,3 +431,43 @@ async def test_spool_returns_to_home_location(env):
     printer.report({"tray_exist_bits": "0"})
     await _settle(bridge)
     assert fake.spools[1]["location"] == "PLA"  # zurück an den Stammplatz, nicht "Lager"
+
+
+async def test_bambu_spool_uses_spoolmandb_filament(env):
+    fake, bridge, printer, clock = env
+    # wie aus der SpoolmanDB importiert: keine Bambu-ID, leicht anderer Farbcode
+    fake.vendors.append({"id": 1, "name": "Bambu Lab", "empty_spool_weight": 250})
+    fake.filaments += [
+        {"id": 1, "name": "Basic Blue", "material": "PLA", "color_hex": "0A2CA5",
+         "vendor": fake.vendors[0], "extra": {}},
+        {"id": 2, "name": "Matte Marine Blue", "material": "PLA", "color_hex": "0B8BD9",
+         "vendor": fake.vendors[0], "extra": {}},
+        {"id": 3, "name": "Matte Marine Blue", "material": "PETG", "color_hex": "0086D6",
+         "vendor": fake.vendors[0], "extra": {}},
+    ]
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    tray = {**BAMBU_TRAY, "tray_sub_brands": "PLA Matte", "tray_info_idx": "GFA01"}
+    printer.report({"ams": [{"id": "0", "tray": [tray]}], "tray_exist_bits": "2"})
+    await _settle(bridge)
+    assert len(fake.filaments) == 3  # kein Duplikat angelegt
+    sp = next(s for s in fake.spools.values() if s["id"] > 2)
+    assert sp["filament"]["id"] == 2
+    assert json.loads(fake.filaments[1]["extra"]["bambu_idx"]) == "GFA01"
+
+
+async def test_link_creates_spool_from_filament(env):
+    fake, bridge, printer, clock = env
+    fake.vendors.append({"id": 1, "name": "SUNLU"})
+    fake.filaments.append({"id": 1, "name": "Matte Black", "material": "PLA",
+                           "color_hex": "000000", "vendor": fake.vendors[0], "spool_weight": 135})
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    await bridge.handle_scan("x2d", "AABBCCDD", weight=1100)
+    st = await bridge.state()
+    assert st["filaments"][0]["label"] == "PLA Matte Black (SUNLU)"
+    res = await bridge.link_tag("AABBCCDD", filament_id=1)
+    assert res["result"] == "armed"
+    sp = next(s for s in fake.spools.values() if s["id"] > 2)
+    assert json.loads(sp["extra"]["nfc_id"]) == "AABBCCDD"
+    assert sp["remaining_weight"] == 965  # Gewicht vom Scan übernommen
