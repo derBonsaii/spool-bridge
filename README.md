@@ -316,6 +316,24 @@ Die Bridge merkt sich auch die **Kennung des RFID-Chips**, den das AMS gelesen h
 
 ---
 
+## 7b. Zusammen mit Bambuddy
+
+Läuft **Bambuddy mit Spoolman-Sync**, kümmern sich sonst beide um die Original-Bambu-Spulen. Das führt zu doppelten Spulen und wechselnden Lagerorten. Deshalb beim X2D in `config.yaml` eintragen:
+
+```yaml
+  x2d:
+    type: bambu
+    ...
+    location: X2D          # genau wie der Drucker in Bambuddy heisst
+    bambu_rfid: bambuddy
+```
+
+Dann gilt:
+- **Bambuddy** legt Bambu-Spulen an und führt Lagerort und Verbrauch pro Druck nach. Der Verbrauch kommt aus der 3MF-Datei und ist genauer als die Prozent-Schätzung des AMS.
+- **Die Bridge** merkt sich bei Bambu-Spulen nur die RFID-Kennung, damit Leser und Waage sie erkennen. Fremdspulen ordnet sie wie gewohnt per Scan dem Slot zu, und zwar im Ortsformat von Bambuddy (`X2D - AMS A Slot 1`). Die Statusseite zeigt deshalb auch die Spulen, die Bambuddy zugeordnet hat.
+
+Beide verbinden sich gleichzeitig per MQTT mit dem Drucker. Das funktioniert normalerweise. Fällt einer von beiden immer wieder raus, liegt es am Verbindungslimit des Druckers.
+
 ## 8. Verbrauchserfassung
 
 - **SV08:** Läuft automatisch über Moonraker (Abschnitt 5).

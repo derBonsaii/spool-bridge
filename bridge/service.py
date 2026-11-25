@@ -13,7 +13,7 @@ from .config import Config
 from .detector import SlotDetector
 from .filament import bambu_spool_info, tray_setting
 from .moonraker import Moonraker
-from .spoolman import Spoolman, empty_spool_weight, filament_label, normalize_uid, spool_choice_label, spool_label
+from .spoolman import Spoolman, empty_spool_weight, filament_label, spool_tags, uid_matches, normalize_uid, spool_choice_label, spool_label
 
 log = logging.getLogger(__name__)
 
@@ -43,8 +43,8 @@ class Bridge:
         self.events: deque = deque(maxlen=50)
         self.unknown: Optional[dict] = None
         self._tasks: set = set()
-        self._spool_cache: tuple[float, list] = (0.0, [])
-        self._filament_cache: tuple[float, list] = (0.0, [])
+        self._spool_cache: tuple = (None, [])
+        self._filament_cache: tuple = (None, [])
         self._rfid: dict[str, dict] = {}  # printer -> slot -> {uuid, spool_id, remain}
 
     # ------------------------------------------------------------ Setup
@@ -71,8 +71,17 @@ class Bridge:
             self.event("error", f"Fehler: {task.exception()}")
 
     def _location(self, printer_name: str, slot: Optional[Slot] = None) -> str:
-        base = self.cfg.printers[printer_name].location
-        return f"{base} {slot_name(slot)}" if slot is not None else base
+        pc = self.cfg.printers[printer_name]
+        if slot is None:
+            return pc.location
+        ams_id, idx = slot
+        if ams_id >= 4:  # AMS HT: eigenes, einfaches Format
+            return f"{pc.location} {slot_name(slot)}"
+        fmt = pc.slot_location or "{printer} AMS {unit}{slot}"
+        return fmt.format(printer=pc.location, unit="ABCD"[ams_id], slot=idx + 1)
+
+    def _bambuddy(self, printer_name: str) -> bool:
+        return self.cfg.printers[printer_name].bambu_rfid == "bambuddy"
 
     def _is_printer_location(self, location: str) -> bool:
         for p in self.cfg.printers.values():
@@ -82,21 +91,21 @@ class Bridge:
 
     async def cached_spools(self, max_age: float = 5.0) -> list:
         ts, spools = self._spool_cache
-        if self.clock() - ts > max_age:
+        if ts is None or self.clock() - ts > max_age:
             spools = await self.spoolman.spools()
             self._spool_cache = (self.clock(), spools)
         return spools
 
     async def cached_filaments(self, max_age: float = 30.0) -> list:
         ts, fil = self._filament_cache
-        if self.clock() - ts > max_age or not fil:
+        if ts is None or self.clock() - ts > max_age:
             fil = await self.spoolman.filaments()
             self._filament_cache = (self.clock(), fil)
         return fil
 
     def _invalidate(self) -> None:
-        self._spool_cache = (0.0, [])
-        self._filament_cache = (0.0, [])
+        self._spool_cache = (None, [])
+        self._filament_cache = (None, [])
 
     # ------------------------------------------------------------ Scan
     async def handle_scan(self, reader: str, uid: str, weight: Optional[float] = None) -> dict:
@@ -203,10 +212,36 @@ class Bridge:
             known = seen.get(slot)
             if known is None or known["uuid"] != info["uuid"]:
                 seen[slot] = {"uuid": info["uuid"], "spool_id": None, "remain": info["remain_pct"]}
-                self._spawn(self._register_bambu_spool(printer.name, slot, info))
+                if self._bambuddy(printer.name):
+                    self._spawn(self._learn_bambu_tag(printer.name, slot, info))
+                else:
+                    self._spawn(self._register_bambu_spool(printer.name, slot, info))
+            elif self._bambuddy(printer.name):
+                continue  # Restmenge führt Bambuddy nach
             elif known["spool_id"] and info["remain_pct"] != known["remain"] and info["remaining"] is not None:
                 known["remain"] = info["remain_pct"]
                 self._spawn(self._sync_remaining(known["spool_id"], info["remaining"]))
+
+    async def _learn_bambu_tag(self, printer: str, slot: Slot, info: dict) -> None:
+        """Bambuddy-Modus: nur die RFID-Kennung an die (von Bambuddy angelegte) Spule hängen."""
+        if not info.get("tag_uid"):
+            return
+        spool = None
+        for _ in range(6):  # Bambuddy legt die Spule evtl. erst gerade an
+            spool = await self.spoolman.find_by_bambu_uuid(info["uuid"])
+            if spool:
+                break
+            await asyncio.sleep(5)
+        if spool is None:
+            log.info("%s %s: Bambu-Spule (noch) nicht in Spoolman – Bambuddy-Sync prüfen",
+                     printer, slot_name(slot))
+            self._rfid.get(printer, {}).pop(slot, None)  # beim nächsten Report erneut
+            return
+        if not any(uid_matches(t, info["tag_uid"]) for t in spool_tags(spool)):
+            await self.spoolman.link_uid(spool["id"], info["tag_uid"])
+            self._invalidate()
+            self.event("info", f"{printer} {slot_name(slot)}: {spool_label(spool)} – RFID-Tag für "
+                               f"Leser/Waage gemerkt")
 
     async def _register_bambu_spool(self, printer: str, slot: Slot, info: dict) -> None:
         try:
@@ -253,7 +288,8 @@ class Bridge:
         setting = tray_setting(spool)
         p.set_tray(slot, setting)
         loc = self._location(printer, slot)
-        await self.spoolman.move_all(loc, self.cfg.storage_location, except_id=spool["id"])
+        await self.spoolman.move_all(loc, self.cfg.storage_location, except_id=spool["id"],
+                                     skip_bambu=self._bambuddy(printer))
         await self.spoolman.place(spool, loc, self._is_printer_location)
         self._invalidate()
         ok = await p.verify_tray(slot, setting)
@@ -265,7 +301,8 @@ class Bridge:
 
     async def _slot_emptied(self, printer: str, slot: Slot) -> None:
         loc = self._location(printer, slot)
-        await self.spoolman.move_all(loc, self.cfg.storage_location)
+        await self.spoolman.move_all(loc, self.cfg.storage_location,
+                                     skip_bambu=self._bambuddy(printer))
         self._invalidate()
         self.event("info", f"{printer} {slot_name(slot)}: Spule entnommen")
 

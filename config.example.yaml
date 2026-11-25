@@ -21,6 +21,10 @@ printers:
     serial: "0XXXXXXXXXXXXXX"   # Seriennummer (Display: Einstellungen > Gerät)
     access_code: "12345678"     # Zugangscode (Display: Einstellungen > Netzwerk/LAN)
     location: X2D               # Lagerort-Präfix in Spoolman -> "X2D AMS A3"
+    # Läuft Bambuddy mit Spoolman-Sync? Dann verwaltet Bambuddy die Bambu-RFID-Spulen
+    # (anlegen, Ort, Verbrauch). Die Bridge übernimmt NFC/Waage und Fremdspulen.
+    # location muss dann dem Druckernamen in Bambuddy entsprechen.
+    # bambu_rfid: bambuddy      # Standard: bridge
 
   sv08:
     type: moonraker

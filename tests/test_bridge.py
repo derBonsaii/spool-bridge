@@ -471,3 +471,32 @@ async def test_link_creates_spool_from_filament(env):
     sp = next(s for s in fake.spools.values() if s["id"] > 2)
     assert json.loads(sp["extra"]["nfc_id"]) == "AABBCCDD"
     assert sp["remaining_weight"] == 965  # Gewicht vom Scan übernommen
+
+
+async def test_bambuddy_mode_only_learns_tag(env):
+    fake, bridge, printer, clock = env
+    pc = bridge.cfg.printers["x2d"]
+    pc.bambu_rfid = "bambuddy"
+    pc.slot_location = "{printer} - AMS {unit} Slot {slot}"
+    # von Bambuddy angelegte Spule: UUID im Feld 'tag', Ort im Bambuddy-Format
+    fake.spools[2].update({"location": "X2D - AMS A Slot 2",
+                           "extra": {"tag": json.dumps(BAMBU_TRAY["tray_uuid"])}})
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    tray = {**BAMBU_TRAY, "tag_uid": "4D3E2A1B00000000"}
+    printer.report({"ams": [{"id": "0", "tray": [tray]}], "tray_exist_bits": "2"})
+    await _settle(bridge)
+    assert len(fake.spools) == 2                       # nichts neu angelegt
+    assert "remaining_weight" not in fake.spools[2]    # Restmenge macht Bambuddy
+    assert fake.spools[2]["location"] == "X2D - AMS A Slot 2"
+    assert json.loads(fake.spools[2]["extra"]["nfc_id"]) == "4D3E2A1B00000000"
+
+    # Statusseite findet die Spule über das Bambuddy-Ortsformat
+    st = await bridge.state()
+    slot = next(s for s in st["printers"][0]["slots"] if s["slot"] == 1)
+    assert slot["spool"] == "PETG Schwarz"
+
+    # Entnehmen: Bambu-Spule wird nicht verschoben (macht Bambuddy)
+    printer.report({"ams": [{"id": "0", "tray": [{"id": "1"}]}], "tray_exist_bits": "0"})
+    await _settle(bridge)
+    assert fake.spools[2]["location"] == "X2D - AMS A Slot 2"

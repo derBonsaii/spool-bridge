@@ -18,6 +18,13 @@ class PrinterCfg:
     access_code: str = ""
     url: str = ""
     location: str = ""  # Lagerort-Präfix in Spoolman, z.B. "X2D"
+    # Wer kümmert sich um Original-Bambu-Spulen (RFID) in Spoolman?
+    #   "bridge"   – die Bridge legt sie an, setzt Ort und Restmenge
+    #   "bambuddy" – Bambuddy macht das; die Bridge merkt sich nur die Tag-Kennung
+    bambu_rfid: str = "bridge"
+    # Format des Lagerorts für AMS-Slots. Platzhalter: {printer} {unit} {slot}
+    # Standard: "X2D AMS A1". Bambuddy-Format: "{printer} - AMS {unit} Slot {slot}"
+    slot_location: str = ""
 
 
 @dataclass
@@ -40,6 +47,11 @@ def load(path: str | Path) -> Config:
         if ptype not in ("bambu", "moonraker"):
             raise ValueError(f"Drucker '{name}': type muss 'bambu' oder 'moonraker' sein")
         p.setdefault("location", name.upper())
+        if p.get("bambu_rfid", "bridge") not in ("bridge", "bambuddy"):
+            raise ValueError(f"Drucker '{name}': bambu_rfid muss 'bridge' oder 'bambuddy' sein")
+        if not p.get("slot_location"):
+            p["slot_location"] = ("{printer} - AMS {unit} Slot {slot}"
+                                  if p.get("bambu_rfid") == "bambuddy" else "{printer} AMS {unit}{slot}")
         printers[name] = PrinterCfg(name=name, type=ptype, **p)
 
     readers = {str(k): (str(v) if v else None) for k, v in (raw.get("readers") or {}).items()}

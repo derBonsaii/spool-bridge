@@ -23,6 +23,17 @@ def normalize_uid(uid: str) -> str:
     return re.sub(r"[^0-9A-Fa-f]", "", uid or "").upper()
 
 
+def spool_bambu_uuid(spool: dict) -> str:
+    """Bambu-Spulen-UUID einer Spule (eigenes Feld oder Bambuddys 'tag'), sonst ''."""
+    extra = spool.get("extra") or {}
+    for key in (BAMBU_UUID_FIELD, "tag"):
+        val = _decode_extra(extra.get(key))
+        val = re.sub(r"[^0-9A-Fa-f]", "", str(val or "")).upper()
+        if len(val) == 32 and val.strip("0"):
+            return val
+    return ""
+
+
 def color_distance(a: str, b: str) -> float:
     try:
         ra, rb = bytes.fromhex((a or "")[:6]), bytes.fromhex((b or "")[:6])
@@ -169,10 +180,10 @@ class Spoolman:
 
     # ------------------------------------------------------------ Bambu-RFID-Spulen
     async def find_by_bambu_uuid(self, uuid: str) -> Optional[dict]:
+        """Spule über die Bambu-Spulen-UUID finden – eigenes Feld oder Bambuddys 'tag'."""
         uuid = uuid.upper()
         for s in await self._req("GET", "/spool", params={"allow_archived": "true"}):
-            val = _decode_extra((s.get("extra") or {}).get(BAMBU_UUID_FIELD))
-            if val and str(val).upper() == uuid:
+            if spool_bambu_uuid(s) == uuid:
                 return s
         return None
 
@@ -255,9 +266,15 @@ class Spoolman:
             body["extra"] = extra
         await self._req("PATCH", f"/spool/{spool['id']}", json=body)
 
-    async def move_all(self, from_location: str, fallback: str, except_id: int | None = None) -> None:
-        """Alle Spulen an from_location zurück an ihren Stammplatz (sonst fallback)."""
+    async def move_all(self, from_location: str, fallback: str, except_id: int | None = None,
+                       skip_bambu: bool = False) -> None:
+        """Alle Spulen an from_location zurück an ihren Stammplatz (sonst fallback).
+
+        skip_bambu: Original-Bambu-Spulen nicht anfassen (z.B. wenn Bambuddy sie verwaltet).
+        """
         for s in await self.spools():
+            if skip_bambu and spool_bambu_uuid(s):
+                continue
             if s.get("location") == from_location and s["id"] != except_id:
                 home = _decode_extra((s.get("extra") or {}).get(HOME_FIELD))
                 await self.set_location(s["id"], str(home).strip() if home else fallback)
