@@ -387,3 +387,11 @@ async def test_scan_response_has_display_fields(env):
     res = await bridge.handle_scan("x2d", "04A1B2C3", weight=845)
     assert (res["vendor"], res["material"], res["name"], res["remaining"]) == \
         ("Polytera", "PLA", "Rot", "645")
+
+
+def test_product_line():
+    from bridge.filament import product_line
+    assert product_line("PLA Matte", "PLA") == "Matte"
+    assert product_line("PLA Basic", "PLA") == "Basic"
+    assert product_line("Support for PLA", "PLA-S") == "Support for PLA"
+    assert product_line("PLA", "PLA") == "PLA"

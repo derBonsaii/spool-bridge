@@ -43,6 +43,17 @@ DENSITY = {
 EMPTY_UUID = "0" * 32
 
 
+def product_line(sub_brand: str, material: str) -> str:
+    """'PLA Matte' -> 'Matte', 'PETG HF' -> 'HF': das Material steht schon im eigenen Feld."""
+    sub = (sub_brand or "").strip()
+    mat = (material or "").strip()
+    if mat and sub.upper().startswith(mat.upper()):
+        rest = sub[len(mat):].strip(" -")
+        if rest:
+            return rest
+    return sub or mat
+
+
 def bambu_spool_info(tray: dict):
     """Liest aus einem AMS-Tray die Daten einer Original-Bambu-Spule (RFID).
 
@@ -74,7 +85,7 @@ def bambu_spool_info(tray: dict):
     return {
         "uuid": uuid,
         "tag_uid": tag_uid,
-        "name": (tray.get("tray_sub_brands") or material).strip(),
+        "name": product_line(tray.get("tray_sub_brands") or "", material),
         "material": material,
         "color_hex": str(tray.get("tray_color") or "FFFFFFFF")[:6].upper(),
         "idx": str(tray.get("tray_info_idx") or ""),
