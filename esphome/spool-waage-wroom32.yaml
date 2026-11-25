@@ -71,11 +71,15 @@ web_server:
   version: 3
 
 globals:
-  - id: status_text
+  - id: line_top          # Hersteller + Material bzw. Status
     type: std::string
     restore_value: false
     initial_value: '"Bereit"'
-  - id: spool_text
+  - id: line_name         # Filament-Name / Farbe
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: line_bottom       # Restgewicht + nächster Schritt
     type: std::string
     restore_value: false
     initial_value: '""'
@@ -127,11 +131,11 @@ number:
 font:
   - file: "gfonts://Roboto"
     id: font_small
-    size: 12
+    size: 11
     glyphsets: [GF_Latin_Core]
   - file: "gfonts://Roboto@700"
     id: font_big
-    size: 26
+    size: 24
     glyphs: "0123456789-.g "
 
 display:
@@ -140,14 +144,17 @@ display:
     address: 0x3C
     update_interval: 500ms
     lambda: |-
-      it.print(0, 0, id(font_small), id(status_text).c_str());
+      // Zeile 1: Hersteller + Material (oder Status), Zeile 2: Name/Farbe,
+      // Mitte: Live-Gewicht (brutto), unten: Restgewicht + nächster Schritt
+      it.print(0, 0, id(font_small), id(line_top).c_str());
+      it.print(0, 12, id(font_small), id(line_name).c_str());
       float w = id(spool_weight).state;
       if (isnan(w)) {
-        it.print(64, 16, id(font_big), TextAlign::TOP_CENTER, "--");
+        it.print(64, 25, id(font_big), TextAlign::TOP_CENTER, "--");
       } else {
-        it.printf(64, 16, id(font_big), TextAlign::TOP_CENTER, "%.0f g", w);
+        it.printf(64, 25, id(font_big), TextAlign::TOP_CENTER, "%.0f g", w);
       }
-      it.print(0, 51, id(font_small), id(spool_text).c_str());
+      it.print(0, 52, id(font_small), id(line_bottom).c_str());
 
 binary_sensor:
   - platform: gpio
@@ -206,8 +213,9 @@ script:
     then:
       - delay: 15s
       - lambda: |-
-          id(status_text) = "Bereit";
-          id(spool_text) = "";
+          id(line_top) = "Bereit";
+          id(line_name) = "";
+          id(line_bottom) = "";
   - id: blink_ok
     mode: restart
     then:
@@ -239,7 +247,10 @@ pn532_i2c:
   update_interval: 500ms
   on_tag:
     then:
-      - lambda: id(status_text) = "Lese...";
+      - lambda: |-
+          id(line_top) = "Lese...";
+          id(line_name) = "";
+          id(line_bottom) = "";
       # kurz warten, bis die Spule ruhig liegt und das Gewicht stabil ist
       - delay: ${settle_ms}
       - http_request.post:
@@ -267,15 +278,29 @@ pn532_i2c:
                     size_t e = body.find('"', p);
                     return e == std::string::npos ? "" : body.substr(p, e - p);
                   };
+                  auto cut = [](std::string t) { return t.size() > 21 ? t.substr(0, 21) : t; };
                   std::string result = field("result");
-                  std::string spool = field("spool");
-                  if (spool.size() > 21) spool = spool.substr(0, 21);
-                  id(spool_text) = spool;
-                  if (result == "armed") id(status_text) = "Jetzt ins AMS";
-                  else if (result == "assigned") id(status_text) = "Zugewiesen";
-                  else if (result == "weighed") id(status_text) = "Gewogen";
-                  else if (result == "unknown") { id(status_text) = "Neuer Tag"; id(spool_text) = "im Web zuweisen"; }
-                  else id(status_text) = "Fehler";
+                  std::string vendor = field("vendor");
+                  std::string material = field("material");
+                  std::string name = field("name");
+                  std::string rest = field("remaining");
+                  std::string next = "";
+                  if (result == "armed") next = "ins AMS";
+                  else if (result == "assigned") next = "gesetzt";
+                  else if (result == "weighed") next = "gewogen";
+                  if (result == "unknown") {
+                    id(line_top) = "Neuer Tag";
+                    id(line_name) = "im Web zuweisen";
+                    id(line_bottom) = "";
+                  } else if (next.empty()) {
+                    id(line_top) = "Fehler";
+                    id(line_name) = "";
+                    id(line_bottom) = "";
+                  } else {
+                    id(line_top) = cut(vendor.empty() ? material : vendor + " " + material);
+                    id(line_name) = cut(name);
+                    id(line_bottom) = cut(rest.empty() ? next : "Rest " + rest + " g - " + next);
+                  }
               - script.execute: status_reset
               - if:
                   condition:
@@ -293,7 +318,8 @@ pn532_i2c:
           on_error:
             then:
               - lambda: |-
-                  id(status_text) = "Bridge offline";
-                  id(spool_text) = "";
+                  id(line_top) = "Bridge offline";
+                  id(line_name) = "";
+                  id(line_bottom) = "";
               - script.execute: status_reset
               - script.execute: blink_error

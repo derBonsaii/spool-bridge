@@ -377,3 +377,13 @@ async def test_link_moves_tag_between_spools(env):
     await bridge.spoolman.link_uid(2, "04A1B2C3")  # war an Spule 1
     assert json.loads(fake.spools[1]["extra"]["nfc_id"]) == ""
     assert json.loads(fake.spools[2]["extra"]["nfc_id"]) == "04A1B2C3"
+
+
+async def test_scan_response_has_display_fields(env):
+    fake, bridge, printer, clock = env
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    fake.spools[1]["spool_weight"] = 200
+    res = await bridge.handle_scan("x2d", "04A1B2C3", weight=845)
+    assert (res["vendor"], res["material"], res["name"], res["remaining"]) == \
+        ("Polytera", "PLA", "Rot", "645")

@@ -18,6 +18,19 @@ from .spoolman import Spoolman, empty_spool_weight, normalize_uid, spool_label
 log = logging.getLogger(__name__)
 
 
+def display_fields(spool: dict, remaining: Optional[float] = None) -> dict:
+    """Kurze Texte fürs Display am Leser (alles als Strings)."""
+    f = spool.get("filament") or {}
+    if remaining is None and spool.get("remaining_weight") is not None:
+        remaining = spool["remaining_weight"]
+    return {
+        "vendor": (f.get("vendor") or {}).get("name", "") or "",
+        "material": f.get("material") or "",
+        "name": f.get("name") or "",
+        "remaining": f"{remaining:.0f}" if remaining is not None else "",
+    }
+
+
 class Bridge:
     def __init__(self, cfg: Config, spoolman: Spoolman,
                  clock: Callable[[], float] = time.monotonic):
@@ -85,13 +98,15 @@ class Bridge:
             return {"result": "unknown", "uid": uid}
 
         label = spool_label(spool)
+        remaining = None
         if weight is not None:
-            await self._apply_weight(spool, weight)
+            remaining = await self._apply_weight(spool, weight)
+        info = display_fields(spool, remaining)
         if not printer:
-            return {"result": "weighed", "spool": label}
+            return {"result": "weighed", "spool": label, **info}
         if printer in self.moonraker:
             await self._assign_moonraker(printer, spool)
-            return {"result": "assigned", "spool": label}
+            return {"result": "assigned", "spool": label, **info}
 
         det = self.detectors[printer]
         # Slots mit Original-Bambu-Spule (RFID) nie einem gescannten Tag zuordnen
@@ -101,10 +116,10 @@ class Bridge:
         if hit:
             slot, _ = hit
             await self.assign_bambu(printer, slot, spool)
-            return {"result": "assigned", "spool": label, "slot": slot_name(slot)}
+            return {"result": "assigned", "spool": label, "slot": slot_name(slot), **info}
         self.event("info", f"{label} bereit – jetzt in einen AMS-Slot am {printer} stecken "
                            f"({int(self.cfg.window_seconds)} s)")
-        return {"result": "armed", "spool": label}
+        return {"result": "armed", "spool": label, **info}
 
     async def link_tag(self, uid: str, spool_id: int) -> dict:
         await self.spoolman.link_uid(spool_id, uid)
@@ -119,19 +134,20 @@ class Bridge:
         return {"result": "linked"}
 
     # ------------------------------------------------------------ Waage
-    async def _apply_weight(self, spool: dict, gross: float) -> None:
+    async def _apply_weight(self, spool: dict, gross: float) -> Optional[float]:
         """Bruttogewicht (Spule auf der Waage) -> Restgewicht in Spoolman."""
         empty = empty_spool_weight(spool)
         label = spool_label(spool)
         if empty is None:
             self.event("warn", f"{label}: {gross:.0f} g gewogen, aber kein Leergewicht der Spule "
                                f"in Spoolman – bei Spule, Filament oder Hersteller eintragen")
-            return
+            return None
         remaining = max(0.0, gross - empty)
         await self.spoolman.set_remaining(spool["id"], remaining)
         self._invalidate()
         self.event("ok", f"{label}: {gross:.0f} g gewogen − {empty:.0f} g Leerspule "
                          f"= {remaining:.0f} g Rest")
+        return remaining
 
     # ------------------------------------------------------------ Moonraker
     async def _assign_moonraker(self, printer: str, spool: dict) -> None:

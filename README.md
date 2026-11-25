@@ -205,7 +205,16 @@ Danach läuft alles wie gewohnt weiter. Am X2D nimmst du die Spule vom Teller un
 
 Wägezelle → HX711: rot E+, schwarz E−, weiss A−, grün A+. Die Farben können je nach Hersteller abweichen.
 
-**Display (optional):** Zeigt oben den Status («Bereit», «Jetzt ins AMS», «Gewogen», «Neuer Tag», «Bridge offline»), in der Mitte das Live-Gewicht und unten die erkannte Spule. Ohne Display läuft alles gleich.
+**Display (optional):** Nach dem Auflegen einer bekannten Spule zeigt es:
+
+```
+Bambu Lab PLA          <- Hersteller + Material
+Matte Dark Brown       <- Filament / Farbe
+      845 g            <- Live-Gewicht (brutto)
+Rest 645 g - ins AMS   <- Restfilament + nächster Schritt
+```
+
+Ohne Spule steht oben «Bereit». Bei einem unbekannten Tag steht «Neuer Tag / im Web zuweisen», ist die Bridge nicht erreichbar, steht «Bridge offline». Ohne Display läuft alles gleich.
 
 **Einrichten (über den Browser):**
 1. `esphome/spool-waage-wroom32.yaml` flashen. `name`, `reader_id` und `bridge_url` wie beim Leser setzen.
