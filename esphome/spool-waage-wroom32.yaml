@@ -16,7 +16,7 @@
 # Wägezelle -> HX711: rot E+, schwarz E-, weiss A-, grün A+ (bei negativem Gewicht A+/A- tauschen
 # oder einfach so lassen: die Kalibrierung gleicht das Vorzeichen aus).
 #
-# Optional: OLED 0.96" SSD1306 128x64 (I2C) – teilt sich die I2C-Pins mit dem PN532:
+# Optional: OLED 0.96" SSD1306 128x64 (I2C, auch gelb/blaue Variante; bei Adresse 0x3D unten anpassen) – teilt sich die I2C-Pins mit dem PN532:
 #   VCC -> 3V3   GND -> GND   SDA -> GPIO21   SCL -> GPIO22
 # Ohne Display läuft alles gleich, ESPHome meldet dann nur eine Warnung im Log.
 #
@@ -135,7 +135,7 @@ font:
     glyphsets: [GF_Latin_Core]
   - file: "gfonts://Roboto@700"
     id: font_big
-    size: 24
+    size: 22
     glyphs: "0123456789-.g "
 
 display:
@@ -144,17 +144,17 @@ display:
     address: 0x3C
     update_interval: 500ms
     lambda: |-
-      // Zeile 1: Material (oder Status), Zeile 2: Name/Farbe,
-      // Mitte: Live-Gewicht (brutto), unten: Restgewicht + nächster Schritt
-      it.print(0, 0, id(font_small), id(line_top).c_str());
-      it.print(0, 12, id(font_small), id(line_name).c_str());
+      // Layout für gelb/blaue 0.96"-OLEDs: Pixelzeilen 0-15 gelb, 16-63 blau.
+      // Gelb: Material (oder Status). Blau: Name/Farbe, Live-Gewicht (brutto), Rest + nächster Schritt.
+      it.print(0, 1, id(font_small), id(line_top).c_str());
+      it.print(0, 17, id(font_small), id(line_name).c_str());
       float w = id(spool_weight).state;
       if (isnan(w)) {
-        it.print(64, 25, id(font_big), TextAlign::TOP_CENTER, "--");
+        it.print(64, 29, id(font_big), TextAlign::TOP_CENTER, "--");
       } else {
-        it.printf(64, 25, id(font_big), TextAlign::TOP_CENTER, "%.0f g", w);
+        it.printf(64, 29, id(font_big), TextAlign::TOP_CENTER, "%.0f g", w);
       }
-      it.print(0, 52, id(font_small), id(line_bottom).c_str());
+      it.print(0, 53, id(font_small), id(line_bottom).c_str());
 
 binary_sensor:
   - platform: gpio
