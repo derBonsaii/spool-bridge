@@ -91,6 +91,7 @@ class BambuPrinter:
         self.loop = loop
         self.state = AmsState()
         self.connected = False
+        self.last_ams_reports: list = []  # Diagnose: letzte Roh-Meldungen zum AMS
         self._seq = 0
         self._client: Optional[mqtt.Client] = None
 
@@ -136,6 +137,8 @@ class BambuPrinter:
         except ValueError:
             return
         ams = (data.get("print") or {}).get("ams")
+        if isinstance(ams, dict):
+            self.last_ams_reports = (self.last_ams_reports + [ams])[-5:]
         if isinstance(ams, dict) and self.state.merge(ams):
             self.loop.call_soon_threadsafe(self.on_update, self)
 

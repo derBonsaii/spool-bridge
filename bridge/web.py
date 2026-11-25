@@ -60,6 +60,18 @@ def make_app(bridge: Bridge) -> web.Application:
         await bridge.assign_bambu(printer, slot, spool)
         return web.json_response({"result": "assigned"})
 
+    async def debug(request):
+        out = {}
+        for name, p in bridge.bambu.items():
+            out[name] = {
+                "connected": p.connected,
+                "exist_bits": None if p.state.exist_bits is None else hex(p.state.exist_bits),
+                "occupied": sorted(str(x) for x in p.state.occupied()),
+                "units": {str(k): v for k, v in p.state.units.items()},
+                "last_ams_reports": p.last_ams_reports,
+            }
+        return web.json_response(out, dumps=lambda o: json.dumps(o, ensure_ascii=False, indent=1))
+
     async def health(request):
         return web.json_response({"ok": True})
 
@@ -69,4 +81,5 @@ def make_app(bridge: Bridge) -> web.Application:
     app.router.add_post("/api/link", link)
     app.router.add_post("/api/assign", assign)
     app.router.add_get("/health", health)
+    app.router.add_get("/api/debug", debug)
     return app
