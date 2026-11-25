@@ -13,7 +13,7 @@ from .config import Config
 from .detector import SlotDetector
 from .filament import bambu_spool_info, tray_setting
 from .moonraker import Moonraker
-from .spoolman import Spoolman, empty_spool_weight, normalize_uid, spool_label
+from .spoolman import Spoolman, empty_spool_weight, normalize_uid, spool_choice_label, spool_label
 
 log = logging.getLogger(__name__)
 
@@ -255,6 +255,7 @@ class Bridge:
             spools = []
             log.warning("Spoolman nicht erreichbar: %s", e)
         by_loc = {s.get("location"): spool_label(s) for s in spools if s.get("location")}
+        by_id = {s["id"]: spool_label(s) for s in spools}
 
         printers = []
         for name, p in self.bambu.items():
@@ -274,7 +275,8 @@ class Bridge:
                     })
             armed = det.armed_spool
             printers.append({"name": name, "type": "bambu", "connected": p.connected,
-                             "armed": armed, "slots": slots})
+                             "armed": armed, "armed_label": by_id.get(armed, "") if armed else "",
+                             "slots": slots})
         for name in self.moonraker:
             printers.append({"name": name, "type": "moonraker", "connected": True,
                              "spool": by_loc.get(self._location(name), "")})
@@ -282,5 +284,6 @@ class Bridge:
             "printers": printers,
             "events": list(self.events),
             "unknown": self.unknown,
-            "spools": [{"id": s["id"], "label": spool_label(s)} for s in spools],
+            "spools": sorted(({"id": s["id"], "label": spool_choice_label(s)} for s in spools),
+                             key=lambda x: x["label"].lower()),
         }

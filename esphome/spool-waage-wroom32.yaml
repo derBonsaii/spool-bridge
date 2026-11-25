@@ -144,7 +144,7 @@ display:
     address: 0x3C
     update_interval: 500ms
     lambda: |-
-      // Zeile 1: Hersteller + Material (oder Status), Zeile 2: Name/Farbe,
+      // Zeile 1: Material (oder Status), Zeile 2: Name/Farbe,
       // Mitte: Live-Gewicht (brutto), unten: Restgewicht + nächster Schritt
       it.print(0, 0, id(font_small), id(line_top).c_str());
       it.print(0, 12, id(font_small), id(line_name).c_str());
@@ -297,8 +297,10 @@ pn532_i2c:
                     id(line_name) = "";
                     id(line_bottom) = "";
                   } else {
-                    id(line_top) = cut(vendor.empty() ? material : vendor + " " + material);
-                    id(line_name) = cut(name);
+                    // Material oben, Name/Farbe darunter – ohne Hersteller und Nummer
+                    if (!material.empty() && name.rfind(material, 0) == 0) material = "";
+                    id(line_top) = cut(material.empty() ? name : material);
+                    id(line_name) = cut(material.empty() ? "" : name);
                     id(line_bottom) = cut(rest.empty() ? next : "Rest " + rest + " g - " + next);
                   }
               - script.execute: status_reset

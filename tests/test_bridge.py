@@ -395,3 +395,13 @@ def test_product_line():
     assert product_line("PLA Basic", "PLA") == "Basic"
     assert product_line("Support for PLA", "PLA-S") == "Support for PLA"
     assert product_line("PLA", "PLA") == "PLA"
+
+
+def test_labels_without_id_and_vendor():
+    from bridge.spoolman import spool_choice_label, spool_label
+    sp = {"id": 16, "remaining_weight": 645.2, "location": "Lager",
+          "filament": {"material": "PLA", "name": "Matte Dark Brown", "vendor": {"name": "Bambu Lab"}}}
+    assert spool_label(sp) == "PLA Matte Dark Brown"
+    assert spool_choice_label(sp) == "PLA Matte Dark Brown (Bambu Lab, 645 g, Lager)"
+    sp["filament"]["name"] = "PLA Matte"
+    assert spool_label(sp) == "PLA Matte"

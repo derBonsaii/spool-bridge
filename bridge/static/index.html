@@ -84,7 +84,7 @@ function render(st) {
       return `<div class="card"><h2>${dot}${esc(p.name)} <span class="sub" style="margin:0">Klipper</span></h2>
         ${p.spool ? esc(p.spool) : '<span class="empty">keine aktive Spule</span>'}</div>`;
     }
-    const armed = p.armed ? `<div class="armed">Spule #${p.armed} bereit – jetzt in einen Slot stecken</div>` : "";
+    const armed = p.armed ? `<div class="armed">${esc(p.armed_label || "Spule")} bereit – jetzt in einen Slot stecken</div>` : "";
     const slots = p.slots.map(s => `<div class="slot">
         <div class="n"><span>${esc(s.name)}</span><span>${s.occupied ? "belegt" : "leer"}</span></div>
         ${s.occupied

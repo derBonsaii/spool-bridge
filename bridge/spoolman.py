@@ -183,10 +183,25 @@ class Spoolman:
 
 
 def spool_label(spool: dict) -> str:
+    """Kurzer Anzeigename ohne Nummer und Hersteller: 'PLA Matte Dark Brown'."""
     f = spool.get("filament") or {}
-    vendor = (f.get("vendor") or {}).get("name", "")
-    parts = [p for p in (vendor, f.get("material"), f.get("name")) if p]
-    return f"#{spool['id']} " + " ".join(parts)
+    material = (f.get("material") or "").strip()
+    name = (f.get("name") or "").strip()
+    if material and name.upper().startswith(material.upper()):
+        material = ""  # 'PLA' + 'PLA Matte' -> nicht doppelt
+    return " ".join(p for p in (material, name) if p) or f"Spule {spool.get('id', '?')}"
+
+
+def spool_choice_label(spool: dict) -> str:
+    """Für Auswahllisten: Name + Hersteller + Rest, damit gleiche Sorten unterscheidbar sind."""
+    f = spool.get("filament") or {}
+    extra = [(f.get("vendor") or {}).get("name", "")]
+    if spool.get("remaining_weight") is not None:
+        extra.append(f"{spool['remaining_weight']:.0f} g")
+    if spool.get("location"):
+        extra.append(spool["location"])
+    extra = [e for e in extra if e]
+    return spool_label(spool) + (f" ({', '.join(extra)})" if extra else "")
 
 
 def empty_spool_weight(spool: dict) -> Optional[float]:

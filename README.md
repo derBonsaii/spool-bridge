@@ -208,7 +208,7 @@ Wägezelle → HX711: rot E+, schwarz E−, weiss A−, grün A+. Die Farben kö
 **Display (optional):** Nach dem Auflegen einer bekannten Spule zeigt es:
 
 ```
-Bambu Lab PLA          <- Hersteller + Material
+PLA                    <- Material
 Matte Dark Brown       <- Filament / Farbe
       845 g            <- Live-Gewicht (brutto)
 Rest 645 g - ins AMS   <- Restfilament + nächster Schritt
