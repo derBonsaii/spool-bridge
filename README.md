@@ -1,13 +1,15 @@
 # spool-bridge
 
-NFC-Spulenerkennung für **Bambu Lab X2D** (AMS) und **Klipper/Moonraker (Sovol SV08)** mit **Spoolman** als einziger, zentraler Filament-Datenbank.
+NFC-Spulenerkennung und Spulenwaage für **Bambu Lab X2D** (AMS) und **Klipper/Moonraker (Sovol SV08)**, mit **Spoolman** als einziger, zentraler Filament-Datenbank.
 
-**Ablauf am X2D:** Spule an den Leser halten, dann in einen beliebigen AMS-Slot stecken. Die Bridge erkennt den Slot und stellt dort Material, Farbe und Temperaturen ein. In Spoolman wird der Lagerort gesetzt (z. B. `X2D AMS A3`).
-**Ablauf am SV08:** Spule an den Leser halten. Sie wird in Moonraker als aktive Spule gesetzt, und Moonraker bucht den Verbrauch selbst in Spoolman ab.
+- **X2D:** Spule an den Leser halten oder auf die Waage legen, dann in einen beliebigen AMS-Slot stecken. Die Bridge erkennt den Slot, stellt dort Material, Farbe und Temperaturen ein und setzt in Spoolman den Lagerort.
+- **SV08:** Spule scannen. Sie wird in Moonraker als aktive Spule gesetzt, und Moonraker bucht den Verbrauch selbst in Spoolman ab.
+- **Waage:** Spule auflegen. Das Restgewicht wird automatisch in Spoolman eingetragen.
+- **Original-Bambu-Spulen** brauchen keinen Sticker. Das AMS erkennt sie per RFID, wahlweise übernimmt Bambuddy (Abschnitt 8).
 
 ```
- NFC-Leser (ESP32-S3 + PN532, ESPHome)
-        │  HTTP: {"reader": "x2d", "uid": "04-A1-…"}
+ NFC-Leser / Waage (ESP32 + PN532, ESPHome)
+        │  HTTP: {"reader": "x2d", "uid": "04-A1-…", "weight": "845.0"}
         ▼
  spool-bridge (Docker auf TrueNAS) ──REST──► Spoolman (Spulen, Restmenge, Lagerort)
         │                     │
@@ -24,12 +26,15 @@ NFC-Spulenerkennung für **Bambu Lab X2D** (AMS) und **Klipper/Moonraker (Sovol 
 2. [X2D vorbereiten](#2-x2d-vorbereiten)
 3. [Spoolman und Bridge auf TrueNAS](#3-spoolman-und-bridge-auf-truenas)
 4. [NFC-Leser bauen und flashen](#4-nfc-leser-bauen-und-flashen)
-5. [SV08 / Moonraker anbinden](#5-sv08--moonraker-anbinden)
-6. [Spulen erfassen und Tags verknüpfen](#6-spulen-erfassen-und-tags-verknüpfen)
-7. [Alltag](#7-alltag)
-8. [Verbrauchserfassung](#8-verbrauchserfassung)
-9. [Fehlersuche](#9-fehlersuche)
-10. [Grenzen der Version 0.1](#10-grenzen-der-version-01)
+5. [Waage bauen und einrichten](#5-waage-bauen-und-einrichten)
+6. [SV08 / Moonraker anbinden](#6-sv08--moonraker-anbinden)
+7. [Spulen erfassen und Tags verknüpfen](#7-spulen-erfassen-und-tags-verknüpfen)
+8. [Zusammen mit Bambuddy](#8-zusammen-mit-bambuddy)
+9. [Alltag](#9-alltag)
+10. [Verbrauchserfassung](#10-verbrauchserfassung)
+11. [Konfiguration (config.yaml)](#11-konfiguration-configyaml)
+12. [Fehlersuche und Diagnose](#12-fehlersuche-und-diagnose)
+13. [Bekannte Grenzen](#13-bekannte-grenzen)
 
 ---
 
@@ -37,14 +42,14 @@ NFC-Spulenerkennung für **Bambu Lab X2D** (AMS) und **Klipper/Moonraker (Sovol 
 
 | Teil | Pro | Bemerkung |
 |---|---|---|
-| ESP32-S3 DevKitC-1 **oder** ESP32-WROOM-32 DevKit | Leser | ein Leser pro Drucker. Beide funktionieren gleich, weil die Slot-Erkennung in der Bridge läuft |
-| PN532-Modul (z. B. Binghe/Elechouse V3) | Leser | wird im SPI-Modus betrieben |
-| 6 Dupont-Kabel | Leser | |
-| NFC-Sticker **NTAG215** (oder 213/216) | Spule | 1 pro Spule, auf die Flanke kleben |
+| ESP32-WROOM-32 DevKit **oder** ESP32-S3 DevKitC-1 | Leser/Waage | Beide funktionieren gleich, weil die Slot-Erkennung in der Bridge läuft |
+| PN532-NFC-Modul (z. B. Binghe/Elechouse V3) | Leser/Waage | WROOM: über I2C (4-Pin-Header), S3: über SPI |
+| NFC-Sticker **NTAG215** (oder 213/216) | Spule | 1 pro Fremdspule, auf die Flanke kleben |
+| Wägezelle + HX711, optional OLED und Taster | Waage | siehe Abschnitt 5 |
 | TrueNAS SCALE mit Apps (Docker) | einmal | für Spoolman und die Bridge |
 | ESPHome (z. B. als Home-Assistant-Add-on) | einmal | zum Flashen der Leser |
 
-> Original-Bambu-Spulen musst du nicht taggen. Die erkennt das AMS selbst per RFID, und die Bridge legt sie automatisch in Spoolman an (siehe Abschnitt 7).
+> Original-Bambu-Spulen musst du nicht taggen. Das AMS liest ihren RFID-Chip selbst.
 
 ---
 
@@ -66,54 +71,87 @@ Die Bridge spricht lokal per MQTT mit dem Drucker. Seit den Bambu-Firmwares mit 
 
 ## 3. Spoolman und Bridge auf TrueNAS
 
-### 3.1 Docker-Image verfügbar machen (einmalig)
+### 3.1 Docker-Image
 
-Bei jedem Push auf `main` baut GitHub Actions automatisch das Image `ghcr.io/derbonsaii/spool-bridge:latest` (Tab **Actions** im Repo).
+Bei jedem Push auf `main` baut GitHub Actions automatisch das Image **`ghcr.io/derbonsaii/spool-bridge:latest`** (Tab **Actions** im Repo).
 
-Weil das Repo privat ist, ist auch das Image zuerst privat. Du hast zwei Möglichkeiten:
+Das Paket muss **öffentlich** sein, damit TrueNAS es ohne Anmeldung laden kann: GitHub → Profil → **Packages** → `spool-bridge` → **Package settings** → *Change visibility* → **Public**. Im Image steckt kein Geheimnis, deine Zugangsdaten liegen nur in `config.yaml` auf dem NAS.
 
-- **Einfach:** GitHub → dein Profil → **Packages** → `spool-bridge` → **Package settings** → *Change visibility* → **Public**. Im Image steckt kein Geheimnis, deine Zugangsdaten liegen nur in `config.yaml` auf dem NAS.
-- **Privat lassen:** In TrueNAS unter *Apps → Configuration → Docker Registries* `ghcr.io` mit deinem GitHub-Benutzer und einem Personal Access Token (Scope `read:packages`) eintragen.
+Willst du es privat halten, trägst du in TrueNAS unter *Apps → Configuration → Docker Registries* `ghcr.io` mit deinem GitHub-Benutzer und einem Personal Access Token (Scope `read:packages`) ein.
 
-### 3.2 Ordner anlegen
+### 3.2 Ordner und Konfiguration
 
-In der TrueNAS-Shell oder über SMB, den Pool-Namen (`tank`) bitte anpassen:
+In der TrueNAS-Shell (System → Shell) einen Ordner anlegen. Pool und Pfad passt du an, z. B. `/mnt/Apps/apps/spool-bridge`:
 
 ```sh
-mkdir -p /mnt/tank/apps/spoolman /mnt/tank/apps/spool-bridge
+mkdir -p /mnt/<pool>/apps/spool-bridge
 ```
 
-Kopiere `config.example.yaml` nach `/mnt/tank/apps/spool-bridge/config.yaml` und trage ein:
+Kopiere [`config.example.yaml`](config.example.yaml) als `config.yaml` in diesen Ordner und trage die Werte ein (Abschnitt 11). Bearbeiten geht in der Shell mit `nano /mnt/<pool>/apps/spool-bridge/config.yaml`. Speichern mit **Ctrl+O**, Enter, dann **Ctrl+X**.
 
-- `spoolman_url`: z. B. `http://<NAS-IP>:7912`
-- unter `printers.x2d`: `host`, `serial`, `access_code` aus Schritt 2
-- unter `printers.sv08`: `url` von Moonraker, z. B. `http://<SV08-IP>:7125`
+### 3.3 App installieren
 
-### 3.3 Apps installieren
+TrueNAS → **Apps → Discover Apps → ⋮ → Install via YAML**. Den Inhalt von [`docker-compose.yaml`](docker-compose.yaml) einfügen und den Pfad beim Volume auf deinen Ordner anpassen.
 
-TrueNAS → **Apps → Discover Apps → ⋮ → Install via YAML**. Den Inhalt von [`docker-compose.yaml`](docker-compose.yaml) einfügen, die Pfade auf deinen Pool anpassen und speichern.
+Läuft Spoolman bei dir schon, lässt du den `spoolman`-Block weg. Dann installierst du nur die Bridge:
 
-Läuft Spoolman bei dir schon, lässt du den `spoolman`-Block weg und trägst bei `spoolman_url` die bestehende Adresse ein.
+```yaml
+services:
+  spool-bridge:
+    image: ghcr.io/derbonsaii/spool-bridge:latest
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
+    volumes:
+      - /mnt/<pool>/apps/spool-bridge:/config
+    environment:
+      - TZ=Europe/Zurich
+      - LOG_LEVEL=INFO
+```
 
 ### 3.4 Prüfen
 
-- Spoolman: `http://<NAS-IP>:7912` → unter *Einstellungen → Extra-Felder* tauchen nach dem Bridge-Start **NFC Tag** (Spule) und **Bambu Filament-ID** (Filament) auf.
-- Bridge: `http://<NAS-IP>:8099` → der X2D erscheint mit grünem Punkt und zeigt seine AMS-Slots.
-- Logs: In TrueNAS bei der App **Logs** öffnen. Eine Zeile wie `x2d: verbunden mit …` bedeutet, dass alles passt.
+- **Logs** der App: Die erste Zeile zeigt die Version (`spool-bridge 0.5.0`). Bei Bambu-Druckern folgt `x2d: verbunden mit …`.
+- **Statusseite:** `http://<NAS-IP>:8099`. Der X2D erscheint mit grünem Punkt und seinen AMS-Slots.
+- **Spoolman:** Unter *Einstellungen → Extra-Felder* hat die Bridge diese Felder angelegt:
+  - bei der Spule: **NFC Tag**, **Bambu Spulen-UUID**, **Stammplatz**
+  - beim Filament: **Bambu Filament-ID**
+
+### 3.5 Aktualisieren
+
+1. In der TrueNAS-Shell das neue Image holen:
+   ```sh
+   docker pull ghcr.io/derbonsaii/spool-bridge:latest
+   ```
+2. Bei der App **Stop**, dann **Start** klicken. Ein reines «Restart» übernimmt das neue Image nicht unbedingt.
+3. Im Log die Versionsnummer kontrollieren.
+
+Die `config.yaml` bleibt dabei erhalten. Nach Änderungen an der `config.yaml` reicht ein Neustart der App.
 
 ---
 
 ## 4. NFC-Leser bauen und flashen
 
-Es gibt zwei Firmware-Varianten:
+| Board | Firmware | PN532 | Rückmeldung |
+|---|---|---|---|
+| ESP32-WROOM-32 DevKit | [`esphome/spool-reader-wroom32.yaml`](esphome/spool-reader-wroom32.yaml) | I2C | blaue Onboard-LED (Blinkmuster) |
+| ESP32-S3 DevKitC-1 | [`esphome/spool-reader.yaml`](esphome/spool-reader.yaml) | SPI | RGB-LED (Farben) |
+| ESP32-WROOM-32 mit Waage | [`esphome/spool-waage-wroom32.yaml`](esphome/spool-waage-wroom32.yaml) | I2C | LED, optional Display (Abschnitt 5) |
 
-| Board | Datei | Rückmeldung |
-|---|---|---|
-| ESP32-S3 DevKitC-1 | `esphome/spool-reader.yaml` | RGB-LED (Farben) |
-| ESP32-WROOM-32 DevKit | `esphome/spool-reader-wroom32.yaml` | blaue Onboard-LED (Blinkmuster), PN532 über **I2C** |
-| ESP32-WROOM-32 + **Waage** | `esphome/spool-waage-wroom32.yaml` | wie oben, zusätzlich HX711 + Wägezelle (Abschnitt 4.5) |
+### 4.1 Verdrahtung
 
-### 4.1 Verdrahtung (PN532 → ESP32-S3 DevKitC-1)
+**PN532 → ESP32-WROOM-32 (I2C).** Viele PN532-Module haben nur einen 4-Pin-Header mit GND / VCC / TXD / RXD. TXD dient dabei als SDA, RXD als SCL.
+
+| PN532 | ESP32-WROOM-32 |
+|---|---|
+| GND | GND |
+| VCC | 3V3 |
+| TXD (= SDA) | GPIO21 |
+| RXD (= SCL) | GPIO22 |
+
+DIP-Schalter für **I2C**: Schalter 1 = ON, Schalter 2 = OFF.
+
+**PN532 → ESP32-S3 DevKitC-1 (SPI)**
 
 | PN532 | ESP32-S3 |
 |---|---|
@@ -124,114 +162,114 @@ Es gibt zwei Firmware-Varianten:
 | MOSI | GPIO11 |
 | SS / NSS | GPIO10 |
 
-**Verdrahtung PN532 → ESP32-WROOM-32 DevKit (I2C, 4-poliger Anschluss):**
+DIP-Schalter für **SPI**: Schalter 1 = OFF, Schalter 2 = ON.
 
-Viele PN532-Module haben nur einen 4-Pin-Header mit GND / VCC / TXD / RXD. Die WROOM-Variante nutzt deshalb I2C, dabei dient TXD als SDA und RXD als SCL.
-
-| PN532 | ESP32-WROOM-32 |
-|---|---|
-| GND | GND |
-| VCC | 3V3 |
-| TXD (= SDA) | GPIO21 |
-| RXD (= SCL) | GPIO22 |
-
-**DIP-Schalter am PN532 für I2C:** Schalter 1 = ON, Schalter 2 = OFF. Danach das Modul einmal stromlos machen. Im ESPHome-Log muss beim Start `Found i2c device at address 0x24` erscheinen.
-
-**Für die S3-Variante (SPI):** Beim Elechouse-/Binghe-V3 ist das meist *Schalter 1 = OFF, Schalter 2 = ON*. Schau trotzdem auf den Aufdruck auf der Platine, das ist die häufigste Fehlerquelle.
+Die DIP-Schalter sind die häufigste Fehlerquelle. Prüf den Aufdruck auf deiner Platine und mach das Modul nach dem Umstellen einmal **stromlos**, denn der PN532 liest den Modus nur beim Einschalten.
 
 ### 4.2 Firmware
 
-1. In ESPHome **New Device → Skip** wählen, dann den Inhalt der passenden Datei einfügen: [`spool-reader.yaml`](esphome/spool-reader.yaml) für den S3 oder [`spool-reader-wroom32.yaml`](esphome/spool-reader-wroom32.yaml) für den WROOM-32.
+1. In ESPHome **New Device → Skip** wählen und den Inhalt der passenden Datei einfügen.
 2. Die `substitutions` anpassen:
-   - `name`: z. B. `spool-reader-x2d` bzw. `spool-reader-sv08`
-   - `reader_id`: `x2d` bzw. `sv08`, passend zu `readers:` in `config.yaml`
-   - `bridge_url`: `http://<NAS-IP>:8099/api/scan`
-   - `led_pin`: S3 `GPIO48`, oder `GPIO38`, falls die LED nicht leuchtet (hängt von der Board-Revision ab). WROOM-32 `GPIO2`.
+   - `name`: Gerätename im Netz, z. B. `spool-reader-x2d`
+   - `reader_id`: muss unter `readers:` in der `config.yaml` stehen, z. B. `x2d`
+   - `bridge_url`: `http://<NAS-IP>:8099/api/scan`. Achtung: Port **8099** (Bridge), nicht 7912 (Spoolman)
+   - `led_pin`: WROOM-32 `GPIO2`. S3 `GPIO48`, oder `GPIO38`, falls die LED nicht leuchtet
 3. Unter *Secrets* `wifi_ssid` und `wifi_password` setzen.
-4. Den ersten Flash per USB machen, danach geht es per OTA.
+4. Den ersten Flash per USB machen, danach geht es per OTA (**Install → Wirelessly**).
 
-Für den zweiten Leser kopierst du die Datei und änderst nur `name` und `reader_id`.
+Für einen zweiten Leser kopierst du die Datei und änderst `name` und `reader_id`.
+
+**Gerät umbenannt oder alte Firmware drauf?** ESPHome sucht das Gerät unter dem Namen aus der YAML. Heisst es noch anders, bleibt das Update in der Warteschlange («wird installiert, sobald das Gerät online ist»). Dann trägst du einmalig die IP ein, flashst und entfernst die Zeile danach wieder:
+
+```yaml
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: 192.168.1.114   # IP des ESP
+```
 
 ### 4.3 LED-Rückmeldung
 
-**ESP32-S3 (RGB-LED):**
+| WROOM-32 (blaue LED) | S3 (RGB-LED) | Bedeutung |
+|---|---|---|
+| – | weiss (kurz) | Tag gelesen, Anfrage läuft |
+| 1× lang | grün | Spule erkannt. X2D: jetzt einstecken. SV08: aktiv gesetzt |
+| 2× kurz | gelb | unbekannter Tag, im Web-UI zuweisen |
+| 5× schnell | rot | Fehler, z. B. Bridge nicht erreichbar |
 
-| Farbe | Bedeutung |
-|---|---|
-| weiss (kurz) | Tag gelesen, Anfrage läuft |
-| grün | Spule erkannt. Am X2D: jetzt einstecken. Am SV08: aktiv gesetzt |
-| gelb | unbekannter Tag, im Web-UI einer Spule zuweisen |
-| rot | Fehler (Bridge nicht erreichbar o. ä.) |
-
-**ESP32-WROOM-32 (blaue LED):**
-
-| Muster | Bedeutung |
-|---|---|
-| 1× lang | Spule erkannt |
-| 2× kurz | unbekannter Tag, im Web-UI zuweisen |
-| 5× schnell | Fehler |
+> Im ESPHome-Log erscheint bei einem unbekannten Tag `HTTP Request failed … Code: 404`. Das ist **kein Fehler**: Die Bridge hat den Tag empfangen und kennt ihn nur noch nicht.
 
 ### 4.4 Platzierung
 
-- **X2D:** Der Leser kommt direkt neben das AMS, zum Beispiel in ein kleines Gehäuse an der Seite. Die Lesereichweite liegt bei etwa 2–4 cm.
-- **SV08:** Der Leser kann neben dem Drucker stehen. Alternativ setzt du ihn direkt hinter den Spulenhalter, sodass der Sticker beim Aufsetzen der Spule vor dem Leser liegt. Dann wird die Spule ohne Antippen erkannt.
+- **X2D:** direkt neben das AMS, z. B. in einem kleinen Gehäuse an der Seite. Die Lesereichweite liegt bei etwa 2–4 cm.
+- **SV08:** neben dem Drucker oder direkt hinter dem Spulenhalter. Liegt der Sticker beim Aufsetzen der Spule vor dem Leser, wird die Spule ohne Antippen erkannt.
 
-### 4.5 Waage (optional, ohne Display)
+---
+
+## 5. Waage bauen und einrichten
 
 Spule auf den Teller legen: Der Leser unter dem Teller liest den Sticker, die Waage das Gewicht. Die Bridge trägt in Spoolman ein:
 
 **Restgewicht = gewogenes Gewicht − Leergewicht der Spule**
 
-Danach läuft alles wie gewohnt weiter. Am X2D nimmst du die Spule vom Teller und steckst sie innerhalb von 60 s in einen AMS-Slot. Hältst du eine Spule nur an den Leser, ohne sie aufzulegen, wird kein Gewicht übertragen.
+Danach geht es weiter wie beim Leser: Am X2D nimmst du die Spule vom Teller und steckst sie innerhalb von 60 s in einen AMS-Slot. Hältst du eine Spule nur an den Leser, ohne sie aufzulegen (unter 30 g), wird kein Gewicht übertragen.
 
-**Teile** (ESP32 und PN532 wie beim Leser):
+### 5.1 Teile
+
+ESP32-WROOM-32 und PN532 wie beim Leser, dazu:
 
 | Teil | Bemerkung |
 |---|---|
-| Wägezelle 5 kg (Biegebalken, z. B. YZC-131) | 1 kg reicht für 1-kg-Spulen, 5 kg auch für grössere |
-| HX711-Modul | meist im Set mit der Wägezelle |
-| Gehäuse | das Gehäuse des FilaMan-Projekts (Display weglassen). Die Pins sind identisch |
-| Touch-Taster TTP223 (optional) | Tara direkt am Gerät, I/O an GPIO25, VCC an 3V3 |
-| OLED 0.96" SSD1306 128×64, I2C (optional) | zeigt Gewicht, Status und Spule. SDA/SCL parallel zum PN532 an GPIO21/22, VCC an 3V3 |
+| Wägezelle 5 kg (Biegebalken) mit HX711-Modul | meist im Set |
+| Gehäuse | [FilaMan Revamped auf MakerWorld](https://makerworld.com/models/1258715). Die Pins entsprechen dem FilaMan-System. Oberteil passend zur Wägezelle (LC1 M4 / LC2 M5) wählen, Elektronikfach passend zum Display |
+| OLED 0.96" SSD1306, 128×64, I2C (optional) | auch die gelb/blaue Variante |
+| Touch-Taster TTP223 (optional) | für Tara direkt am Gerät |
 
-**Verdrahtung HX711 → ESP32-WROOM-32:**
+### 5.2 Verdrahtung (alles an den WROOM-32)
 
-| HX711 | ESP32 |
-|---|---|
-| VCC | 3V3 |
-| GND | GND |
-| DT / DOUT | GPIO16 |
-| SCK | GPIO17 |
+| Teil | Anschluss | ESP32 |
+|---|---|---|
+| PN532 | SDA / SCL | GPIO21 / GPIO22 |
+| Display | SDA / SCL | GPIO21 / GPIO22 (parallel zum PN532) |
+| HX711 | DT (DOUT) / SCK | GPIO16 / GPIO17 |
+| Taster TTP223 | I/O | GPIO25 |
+| alle | VCC / GND | 3V3 / GND |
 
-Wägezelle → HX711: rot E+, schwarz E−, weiss A−, grün A+. Die Farben können je nach Hersteller abweichen.
+Wägezelle → HX711: rot E+, schwarz E−, weiss A−, grün A+. Die Farben können je nach Hersteller abweichen. Ein vertauschtes Vorzeichen gleicht die Kalibrierung aus.
 
-**Display (optional):** Nach dem Auflegen einer bekannten Spule zeigt es:
+### 5.3 Einrichten
+
+1. [`esphome/spool-waage-wroom32.yaml`](esphome/spool-waage-wroom32.yaml) flashen. `name`, `reader_id` und `bridge_url` wie beim Leser setzen. Ersetzt die Waage einen bisherigen Leser, beim ersten Flash `use_address` setzen (Abschnitt 4.2).
+2. Im ESPHome-Log prüfen: Beim Start müssen auf I2C **0x24** (PN532) und **0x3C** (Display) erscheinen. Meldet sich das Display auf **0x3D**, änderst du in der Firmware `address: 0x3C` entsprechend.
+3. Die Weboberfläche des ESP öffnen: `http://<IP-des-ESP>/`
+4. Teller leer lassen und **Tara** drücken (oder den Touch-Taster).
+5. Ein bekanntes Gewicht auflegen, z. B. eine gewogene volle Spule. Den Wert bei **Kalibriergewicht** eintragen und **Kalibrieren** drücken.
+6. Kontrolle: Unter **Gewicht** steht das richtige Gewicht. Tara und Kalibrierung bleiben nach einem Neustart erhalten.
+
+### 5.4 Display
+
+Nach dem Auflegen einer bekannten Spule:
 
 ```
-PLA                    <- Material
-Matte Dark Brown       <- Filament / Farbe
-      845 g            <- Live-Gewicht (brutto)
-Rest 645 g - ins AMS   <- Restfilament + nächster Schritt
+PLA                    ← Material (gelber Streifen)
+Matte Dark Brown       ← Filament / Farbe
+      845 g            ← Live-Gewicht (brutto)
+Rest 645 g - ins AMS   ← Restfilament + nächster Schritt
 ```
 
-Ohne Spule steht oben «Bereit». Bei einem unbekannten Tag steht «Neuer Tag / im Web zuweisen», ist die Bridge nicht erreichbar, steht «Bridge offline». Ohne Display läuft alles gleich.
+Ohne Spule steht oben «Bereit». Bei einem unbekannten Tag steht «Neuer Tag / im Web zuweisen», ist die Bridge nicht erreichbar, steht «Bridge offline». Nach 15 Sekunden springt die Anzeige zurück auf «Bereit».
 
-**Einrichten (über den Browser):**
-1. `esphome/spool-waage-wroom32.yaml` flashen. `name`, `reader_id` und `bridge_url` wie beim Leser setzen.
-2. Die Weboberfläche des ESP öffnen: `http://<IP-des-ESP>/`
-3. Teller leer lassen und auf **Tara** drücken.
-4. Ein bekanntes Gewicht auflegen, z. B. eine volle Spule mit bekanntem Gewicht oder 1 l Wasser in einer gewogenen Flasche. Den Wert bei **Kalibriergewicht** eintragen und **Kalibrieren** drücken.
-5. Kontrolle: Unter **Gewicht** steht jetzt das richtige Gewicht. Tara und Kalibrierung bleiben nach einem Neustart erhalten.
+### 5.5 Leergewicht in Spoolman
 
-**Leergewicht in Spoolman:** Die Bridge braucht das Leergewicht der Spule und sucht es in dieser Reihenfolge: **Spule → Filament → Hersteller** (*Leergewicht Spule* bzw. *Spool weight*). Am einfachsten trägst du es einmal pro Hersteller ein, z. B. Bambu Lab Kartonspule bzw. eigene Spule. Fehlt es, erscheint im Ereignis-Log eine Warnung, und das Gewicht wird nicht übernommen.
+Die Bridge braucht das **Leergewicht der Spule** und sucht es in dieser Reihenfolge: **Spule → Filament → Hersteller**. Bei Filamenten aus der SpoolmanDB ist es meist schon hinterlegt. Sonst trägst du es am einfachsten einmal pro Hersteller ein. Fehlt es, steht im Ereignis-Log eine Warnung, und das Gewicht wird nicht übernommen.
 
-**Reine Waage ohne Drucker:** Steht in `config.yaml` unter `readers:` beim Leser kein Drucker (`waage:` ohne Wert), trägt sie nur das Gewicht ein und bereitet keinen Slot vor.
+### 5.6 Eine Waage für mehrere Drucker
 
-**Platzierung des Lesers:** Der PN532 sitzt unter dem Teller. Die Spule legst du mit der Sticker-Seite nach unten auf. Bis etwa 3 mm Kunststoff liest er problemlos durch.
+Der Leser bzw. die Waage ist in der `config.yaml` einem Drucker zugeordnet (`readers:`). Ein Scan bereitet nur diesen Drucker vor. Ohne Drucker (`waage:` ohne Wert) trägt die Waage nur das Gewicht ein.
 
 ---
 
-## 5. SV08 / Moonraker anbinden
+## 6. SV08 / Moonraker anbinden
 
 In `moonraker.conf` am SV08:
 
@@ -243,34 +281,38 @@ sync_rate: 5
 
 Danach Moonraker neu starten. Ab jetzt bucht Moonraker beim Drucken den Verbrauch der aktiven Spule direkt in Spoolman ab. In Mainsail/Fluidd siehst du die aktive Spule.
 
-Die Bridge setzt die aktive Spule über `POST /server/spoolman/spool_id`, sobald du sie am SV08-Leser scannst. Den Lagerort setzt sie auf `SV08`, die vorher aktive Spule geht zurück ins `Lager`.
+Die Bridge setzt die aktive Spule über `POST /server/spoolman/spool_id`, sobald du sie am SV08-Leser scannst. Den Lagerort setzt sie auf `SV08`. Die vorher aktive Spule kehrt an ihren Stammplatz zurück (Abschnitt 9).
 
 ---
 
-## 6. Spulen erfassen und Tags verknüpfen
+## 7. Spulen erfassen und Tags verknüpfen
 
-### Empfohlen: Filamente aus der SpoolmanDB
+### 7.1 Empfohlen: Filamente aus der SpoolmanDB
 
-Spoolman kann Filamente aus der Community-Datenbank **SpoolmanDB** übernehmen, mit Name, Farbe, Dichte, Gewicht und **Leergewicht der Spule**. Das Leergewicht braucht die Waage. Beim Anlegen eines Filaments in Spoolman wählst du dafür «Aus externer Datenbank importieren».
+Spoolman kann Filamente aus der Community-Datenbank **SpoolmanDB** übernehmen, mit Name, Farbe, Dichte, Gewicht und **Leergewicht der Spule**. Beim Anlegen eines Filaments in Spoolman wählst du dafür «Aus externer Datenbank importieren».
 
-Danach brauchst du **keine Spulen von Hand anzulegen**:
-- **Fremdspule mit Sticker:** Beim ersten Scan erscheint auf der Statusseite «Neuer Tag erkannt». Unter **«Neue Spule anlegen aus Filament»** wählst du das Filament und klickst auf **Verknüpfen**. Die Bridge legt die Spule an, hängt den Tag an und übernimmt, falls die Spule auf der Waage lag, gleich das Restgewicht.
-- **Bambu-Spule:** Einfach ins AMS stecken. Die Bridge sucht unter «Bambu Lab» das passende Filament: gleiches Material, Produktlinie im Namen (z. B. «Matte»), ähnlichste Farbe. Sie trägt dort die Bambu-ID ein und legt die Spule an. Nur wenn nichts passt, legt sie ein neues Filament an.
+Spulen musst du dann nicht von Hand anlegen:
+- **Fremdspule mit Sticker:** Beim ersten Scan erscheint auf der Statusseite «Neuer Tag erkannt». Unter **«Neue Spule anlegen aus Filament»** wählst du das Filament und klickst auf **Verknüpfen**. Die Bridge legt die Spule an, hängt den Tag an und übernimmt gleich das Restgewicht, falls die Spule auf der Waage lag.
+- **Bambu-Spule:** einfach ins AMS stecken (Abschnitt 9). Die Bridge sucht unter «Bambu Lab» das passende Filament: gleiches Material, Produktlinie im Namen (z. B. «Matte»), ähnlichste Farbe. Nur wenn nichts passt, legt sie ein neues an. Im Bambuddy-Modus übernimmt Bambuddy das (Abschnitt 8).
 
-### Von Hand
+**Jede Rolle bekommt ihren eigenen Sticker.** Hast du z. B. 10 Rollen desselben Filaments, sind das in Spoolman **1 Filament und 10 Spulen**. Nur so stimmt das Restgewicht pro Rolle. Den Sticker klebst du am besten erst auf, wenn du die Rolle auspackst.
 
-1. **In Spoolman Hersteller und Filamente anlegen** (Material, Farbe, Düsentemperatur, Dichte, Gewicht). Die Felder **Material**, **Farbe** und **Extruder-Temperatur** nutzt die Bridge für die AMS-Einstellung.
-2. **Spulen anlegen** (Ausgangsgewicht/Restgewicht, Lagerort `Lager`).
-3. **Sticker aufkleben**, am besten auf die Aussenseite der Flanke.
-4. **Verknüpfen:** Halte die Spule an einen Leser. Die LED wird gelb, und im Web-UI (`:8099`) erscheint die Box *Neuer Tag erkannt*. Dort wählst du die Spule und klickst **Verknüpfen**. Die Bridge behandelt das gleich wie einen Scan, die Spule ist also direkt bereit zum Einstecken.
+### 7.2 Von Hand
 
-   Alternativ kannst du die UID auch manuell in Spoolman ins Feld *NFC Tag* der Spule eintragen.
+1. In Spoolman **Hersteller und Filament** anlegen. Die Felder **Material**, **Farbe** und **Extruder-Temperatur** nutzt die Bridge für die AMS-Einstellung.
+2. **Spule** anlegen.
+3. Den **Sticker** auf die Aussenseite der Flanke kleben.
+4. Die Spule an den Leser halten. Auf der Statusseite (`:8099`) erscheint *Neuer Tag erkannt*. Unter **«Bestehende Spule»** die Spule wählen und **Verknüpfen** klicken. Die Bridge behandelt das wie einen Scan, die Spule ist also direkt bereit zum Einstecken.
 
-Nur die UID des Stickers wird gespeichert. Auf den Tag selbst wird nichts geschrieben, alle Daten bleiben in Spoolman.
+### 7.3 Wo der Tag gespeichert wird
 
-### Bambu-Filament-ID (optional, für präzisere Profile)
+Auf den Sticker selbst wird **nichts geschrieben**. Die Bridge speichert nur seine fest eingebaute Kennung (UID) in Spoolman, bei der Spule im Extra-Feld **NFC Tag**. Mehrere Tags pro Spule sind möglich und stehen mit Komma getrennt darin, z. B. beide Seiten einer Bambu-Spule.
 
-Ohne Angabe setzt die Bridge das passende **Generic-Profil** von Bambu:
+**Falsch verknüpft?** In Spoolman bei der falschen Spule die UID aus dem Feld *NFC Tag* löschen. Danach den Tag nochmals scannen und auf der Statusseite der richtigen Spule zuweisen.
+
+### 7.4 Bambu-Filament-ID (optional)
+
+Ohne Angabe setzt die Bridge im AMS-Slot das passende **Generic-Profil** von Bambu:
 
 | Material | ID |
 |---|---|
@@ -282,43 +324,21 @@ Ohne Angabe setzt die Bridge das passende **Generic-Profil** von Bambu:
 | PA | GFN99 |
 | PC | GFC99 |
 | PVA | GFS99 |
-| HIPS | GFS98 |
+| HIPS | GFS98 (bitte am Drucker kontrollieren) |
 
-Willst du ein bestimmtes Preset, etwa ein Bambu-Original oder ein eigenes Cloud-Preset, trägst du dessen ID in Spoolman beim **Filament** im Extra-Feld **Bambu Filament-ID** ein. Die ID findest du in Bambu Studio in der JSON-Datei des Filament-Presets (`filament_id`).
+Für ein bestimmtes Preset, etwa ein Bambu-Original oder ein eigenes, trägst du dessen ID in Spoolman beim **Filament** im Feld **Bambu Filament-ID** ein. Die ID steht in Bambu Studio in der JSON-Datei des Presets (`filament_id`).
 
-> Die Zuordnung für HIPS (GFS98) solltest du einmal am Drucker kontrollieren. Stimmt sie nicht, trägst du die richtige ID beim Filament ein.
+**An den X2D übergeben werden:** Materialtyp, Filament-Profil (ID), Farbe und Düsentemperatur min/max (Extruder-Temperatur −20/+10 °C). Hersteller, Name, Restmenge und K-Wert werden nicht übergeben.
 
----
+### 7.5 Namen in Spoolman
 
-## 7. Alltag
-
-**X2D:**
-1. Spule an den Leser halten, die LED wird grün. Im Web-UI steht «Spule #… bereit».
-2. Innerhalb von 60 s die Spule in einen beliebigen AMS-Slot stecken.
-3. Die Bridge stellt den Slot ein, liest die Bestätigung des Druckers zurück und setzt den Lagerort in Spoolman.
-
-Die umgekehrte Reihenfolge geht auch: zuerst einstecken, dann innerhalb von 60 s scannen.
-
-Nimmst du eine Spule aus dem AMS, stellt die Bridge sie in Spoolman an ihren **Stammplatz** zurück. Das ist der Ort, an dem sie vor dem Einstecken war, z. B. `PLA`. Die Bridge merkt ihn sich im Extra-Feld *Stammplatz*. Hatte die Spule keinen Ort, kommt sie nach `storage_location` (Standard: `Lager`).
-
-**Original-Bambu-Spulen (RFID):** Einfach ins AMS stecken, nicht scannen. Sobald das AMS den RFID-Chip gelesen hat, passiert Folgendes:
-- Die Bridge sucht die Spule in Spoolman über ihre eindeutige Bambu-Spulen-UUID (Extra-Feld *Bambu Spulen-UUID*).
-- Ist sie noch nicht vorhanden, legt sie Hersteller **Bambu Lab**, das Filament (z. B. *PLA Basic*, Farbe, Gewicht, Bambu-ID) und die Spule automatisch an. Gleiche Filamente werden wiederverwendet, es entsteht also pro Farbe/Sorte nur ein Eintrag.
-- Sie setzt den Lagerort und übernimmt die Restmenge, die das AMS meldet (siehe Abschnitt 8).
-
-Spulen, die beim Start der Bridge schon im AMS stecken, werden ebenfalls erfasst.
-
-Die Bridge merkt sich auch die **Kennung des RFID-Chips**, den das AMS gelesen hat, im Feld *NFC Tag* der Spule. Danach erkennen Leser und Waage die Bambu-Spule ohne Sticker. Jede Bambu-Spule hat **zwei Chips, einen auf jeder Seite**. Gelernt wird nur der, den das AMS gelesen hat. Hältst du die andere Seite an den Leser, erscheint «Neuer Tag». Verknüpfe ihn einmal im Web-UI mit derselben Spule. Eine Spule kann beliebig viele Tags haben. Steckst du eine Bambu-Spule später in einen anderen Slot, wird nur der Lagerort angepasst, es entsteht keine doppelte Spule.
-
-**SV08:** Spule scannen, fertig.
-
-**Manuell korrigieren:** Fahre im Web-UI mit der Maus über einen belegten Slot, wähle eine Spule und klicke **Setzen**.
+Statusseite und Display zeigen **Material + Filament-Name**, ohne Spoolman-Nummer und Hersteller. Am übersichtlichsten wird es, wenn der Filament-Name **Produktlinie + Farbe** enthält, z. B. Material `PLA`, Name `Matte Dark Brown`. Den Hersteller solltest du trotzdem eintragen: Die Bridge erkennt Bambu-Filamente über «Bambu Lab», und das Leergewicht lässt sich pro Hersteller hinterlegen.
 
 ---
 
-## 7b. Zusammen mit Bambuddy
+## 8. Zusammen mit Bambuddy
 
-Läuft **Bambuddy mit Spoolman-Sync**, kümmern sich sonst beide um die Original-Bambu-Spulen. Das führt zu doppelten Spulen und wechselnden Lagerorten. Deshalb beim X2D in `config.yaml` eintragen:
+Läuft **Bambuddy mit Spoolman-Sync**, kümmern sich sonst beide um die Original-Bambu-Spulen. Das führt zu doppelten Spulen und wechselnden Lagerorten. Deshalb beim X2D in der `config.yaml` eintragen:
 
 ```yaml
   x2d:
@@ -329,42 +349,145 @@ Läuft **Bambuddy mit Spoolman-Sync**, kümmern sich sonst beide um die Original
 ```
 
 Dann gilt:
-- **Bambuddy** legt Bambu-Spulen an und führt Lagerort und Verbrauch pro Druck nach. Der Verbrauch kommt aus der 3MF-Datei und ist genauer als die Prozent-Schätzung des AMS.
-- **Die Bridge** merkt sich bei Bambu-Spulen nur die RFID-Kennung, damit Leser und Waage sie erkennen. Fremdspulen ordnet sie wie gewohnt per Scan dem Slot zu, und zwar im Ortsformat von Bambuddy (`X2D - AMS A Slot 1`). Die Statusseite zeigt deshalb auch die Spulen, die Bambuddy zugeordnet hat.
+
+| | Bambuddy | Bridge |
+|---|---|---|
+| Bambu-Spulen (RFID) | anlegen, Lagerort, Verbrauch pro Druck | merkt sich nur die RFID-Kennung, damit Leser und Waage sie erkennen |
+| Fremdspulen am X2D | – | scannen, Slot einstellen, Lagerort |
+| Waage | – | Restgewicht |
+| SV08 | – | aktive Spule in Moonraker |
+
+Die Bridge nutzt dann das Ortsformat von Bambuddy (`X2D - AMS A Slot 1`). Die Statusseite zeigt deshalb auch die Spulen, die Bambuddy zugeordnet hat. In Bambuddy stellst du den Spoolman-Sync auf **Auto**.
+
+Hat die Bridge vorher schon Bambu-Spulen angelegt (Feld *Bambu Spulen-UUID* gefüllt), legt Bambuddy sie ein zweites Mal an. Die alten Einträge der Bridge kannst du löschen.
 
 Beide verbinden sich gleichzeitig per MQTT mit dem Drucker. Das funktioniert normalerweise. Fällt einer von beiden immer wieder raus, liegt es am Verbindungslimit des Druckers.
 
-## 8. Verbrauchserfassung
+---
 
-- **SV08:** Läuft automatisch über Moonraker (Abschnitt 5).
-- **X2D, Original-Bambu-Spulen:** Das AMS schätzt die Restmenge in Prozent, und die Bridge schreibt sie bei jeder Änderung als Restgewicht in Spoolman. Damit das funktioniert, muss in Bambu Studio bzw. am Drucker in den AMS-Einstellungen die Option zum **Aktualisieren der Restmenge** (Restkapazität schätzen) aktiv sein. Die Genauigkeit liegt bei etwa ±1 %, also rund 10 g pro 1-kg-Spule.
-- **X2D, Fremdspulen mit NFC-Sticker:** Das AMS meldet für Fremdspulen keine Restmenge. Mit der **Waage** (Abschnitt 4.5) wird das Restgewicht bei jedem Auflegen genau nachgeführt. Ohne Waage trägst du es von Zeit zu Zeit von Hand in Spoolman ein.
+## 9. Alltag
+
+### X2D: Fremdspule mit Sticker
+
+1. Die Spule an den Leser halten oder auf die Waage legen. Die LED meldet «erkannt», auf der Statusseite steht «… bereit – jetzt in einen AMS-Slot stecken».
+2. Innerhalb von 60 s die Spule in einen beliebigen AMS-Slot stecken.
+3. Die Bridge stellt den Slot ein, liest die Bestätigung des Druckers zurück und setzt den Lagerort in Spoolman.
+
+Die umgekehrte Reihenfolge geht auch: zuerst einstecken, dann innerhalb von 60 s scannen. Mehrere Spulen immer **nacheinander** einlegen, nicht gleichzeitig.
+
+### X2D: Original-Bambu-Spule
+
+Einfach ins AMS stecken, **nicht scannen**. Sobald das AMS den RFID-Chip gelesen hat:
+- **Standard-Modus:** Die Bridge sucht die Spule über ihre Bambu-Spulen-UUID oder legt sie an. Sie setzt den Lagerort und übernimmt die Restmenge, die das AMS meldet.
+- **Bambuddy-Modus:** Bambuddy erledigt das (Abschnitt 8).
+
+In beiden Fällen merkt sich die Bridge die **Kennung des RFID-Chips** im Feld *NFC Tag*. Danach erkennen Leser und Waage die Bambu-Spule. Jede Bambu-Spule hat **zwei Chips, einen auf jeder Seite**. Gelernt wird nur der, den das AMS gelesen hat. Die andere Seite verknüpfst du einmal auf der Statusseite mit derselben Spule.
+
+### Spule entnehmen
+
+Nimmst du eine Spule aus dem AMS, stellt die Bridge sie in Spoolman an ihren **Stammplatz** zurück, also an den Ort, an dem sie vor dem Einstecken war, z. B. `PLA`. Die Bridge merkt ihn sich im Feld *Stammplatz*. Hatte die Spule keinen Ort, kommt sie nach `storage_location` (Standard: `Lager`). Im Bambuddy-Modus fasst die Bridge Bambu-Spulen dabei nicht an.
+
+### SV08
+
+Spule scannen oder auf die Waage legen, fertig.
+
+### Manuell korrigieren
+
+Auf der Statusseite mit der Maus über einen belegten Slot fahren, eine Spule wählen und **Setzen** klicken.
 
 ---
 
-## 9. Fehlersuche
+## 10. Verbrauchserfassung
+
+| Drucker / Spule | Wie |
+|---|---|
+| **SV08** | automatisch über Moonraker (Abschnitt 6) |
+| **X2D, Bambu-Spule, Bambuddy-Modus** | Bambuddy bucht pro Druck aus der 3MF-Datei ab, auch bei abgebrochenen Drucken |
+| **X2D, Bambu-Spule, Standard-Modus** | Die Bridge übernimmt die Prozent-Schätzung des AMS als Restgewicht (etwa ±10 g pro 1-kg-Spule). Dafür muss in den AMS-Einstellungen das **Schätzen der Restmenge** aktiv sein |
+| **X2D, Fremdspule** | Das AMS meldet keine Restmenge. Das Restgewicht wird bei jedem Auflegen auf die **Waage** genau nachgeführt |
+
+Bis eine neue Spule das erste Mal gewogen wird, steht in Spoolman das volle Nenngewicht.
+
+---
+
+## 11. Konfiguration (config.yaml)
+
+Vorlage: [`config.example.yaml`](config.example.yaml)
+
+| Schlüssel | Bedeutung | Standard |
+|---|---|---|
+| `spoolman_url` | Adresse von Spoolman, ohne `/api` | – (Pflicht) |
+| `storage_location` | Lagerort für entnommene Spulen ohne Stammplatz | `Lager` |
+| `window_seconds` | Zeitfenster zwischen Scan und Einstecken | `60` |
+| `port` | Port für Statusseite und Leser-API | `8099` |
+
+**Drucker** (`printers:`), Bambu:
+
+| Schlüssel | Bedeutung |
+|---|---|
+| `type: bambu` | |
+| `host` | IP des Druckers |
+| `serial` | Seriennummer (in Anführungszeichen) |
+| `access_code` | Zugangscode (in Anführungszeichen) |
+| `location` | Lagerort-Präfix in Spoolman, z. B. `X2D` |
+| `bambu_rfid` | `bridge` (Standard) oder `bambuddy` (Abschnitt 8) |
+| `slot_location` | Ortsformat für AMS-Slots mit `{printer}`, `{unit}`, `{slot}`. Standard: `{printer} AMS {unit}{slot}` → `X2D AMS A1`, im Bambuddy-Modus `{printer} - AMS {unit} Slot {slot}` |
+
+**Drucker**, Klipper:
+
+| Schlüssel | Bedeutung |
+|---|---|
+| `type: moonraker` | |
+| `url` | Moonraker-Adresse, z. B. `http://<SV08-IP>:7125` |
+| `location` | Lagerort in Spoolman, z. B. `SV08` |
+
+**Leser** (`readers:`): `<reader_id>: <Druckername>`. Ohne Druckername trägt der Leser bzw. die Waage nur das Gewicht ein.
+
+Nach Änderungen die App in TrueNAS neu starten.
+
+---
+
+## 12. Fehlersuche und Diagnose
 
 | Symptom | Ursache / Lösung |
 |---|---|
-| X2D im Web-UI rot, Log: `MQTT-Verbindung abgelehnt` | Access-Code falsch oder Developer-Modus aus (Schritt 2) |
+| X2D rot, Log: `MQTT-Verbindung abgelehnt` | Access-Code falsch oder Developer-Modus aus (Abschnitt 2) |
 | X2D rot, keine Log-Meldung | falsche IP oder Drucker aus. `host` prüfen |
-| Log: `Befehl gesendet, aber keine Bestätigung` | Der Drucker hat die Slot-Einstellung nicht übernommen. Slot am Display prüfen, LOG_LEVEL=DEBUG setzen und Log anschauen (siehe Abschnitt 10) |
-| LED bleibt aus beim Scan | PN532 im falschen Modus (DIP-Schalter, danach stromlos machen) oder Verdrahtung falsch. ESPHome-Log zeigt `PN532 not found`. Bei I2C: Erscheint im Log kein Gerät auf 0x24, SDA/SCL tauschen bzw. Kabel prüfen |
-| LED rot | `bridge_url` falsch oder Bridge läuft nicht. `http://<NAS-IP>:8099/health` im Browser testen |
-| Log: `Unbekannter Leser` | `reader_id` in ESPHome stimmt nicht mit `readers:` in `config.yaml` überein |
-| Falscher Slot zugeordnet | In den 60 s wurden zwei Spulen gleichzeitig gesteckt. Immer eine nach der anderen, oder im Web-UI korrigieren |
-| Bambu-Spule erscheint nicht in Spoolman | Das AMS hat den RFID-Chip noch nicht gelesen, das dauert nach dem Einstecken einige Sekunden. Am Display muss die Sorte erscheinen. Danach im Log nachsehen |
-| Restmenge einer Bambu-Spule bleibt stehen | Option zum Schätzen der Restmenge in den AMS-Einstellungen aktivieren |
-| Spoolman-Felder fehlen | Die Bridge legt sie beim Start an. Erreicht sie Spoolman nicht, `spoolman_url` prüfen |
+| Alle AMS-Slots «leer», obwohl Spulen drin sind | `http://<NAS-IP>:8099/api/debug` öffnen und den Inhalt melden. Dort stehen die Rohmeldungen des Druckers |
+| Log: `Befehl gesendet, aber keine Bestätigung` | Der Drucker hat die Slot-Einstellung nicht übernommen. Slot am Display prüfen, `/api/debug` anschauen |
+| LED bleibt aus beim Scan | PN532 im falschen Modus (DIP-Schalter, danach stromlos machen) oder Verdrahtung falsch. ESPHome-Log: `PN532 not found` bzw. kein Gerät auf 0x24 |
+| LED 5× schnell / rot | Bridge nicht erreichbar. `bridge_url` prüfen (Port **8099**), `http://<NAS-IP>:8099/health` im Browser testen |
+| ESPHome-Log: `Code: 404` | normal bei einem unbekannten Tag, auf der Statusseite zuweisen |
+| Scan kommt nicht an, Statusseite zeigt nichts | Läuft die neue Firmware wirklich? Gerätename im ESPHome-Log bzw. Router prüfen, ggf. mit `use_address` neu flashen (Abschnitt 4.2) |
+| Gerät in ESPHome «offline» | ESPHome findet es nicht unter dem Namen aus der YAML. `use_address` setzen. Für Logs **Logs → Wirelessly** wählen |
+| Log: `Unbekannter Leser` | `reader_id` in ESPHome stimmt nicht mit `readers:` in der `config.yaml` überein |
+| Falscher Slot zugeordnet | Zwei Spulen innerhalb von 60 s eingesteckt. Immer nacheinander, oder auf der Statusseite korrigieren |
+| Bambu-Spule erscheint nicht in Spoolman | Das AMS braucht nach dem Einstecken einige Sekunden für den RFID-Chip. Im Bambuddy-Modus den Bambuddy-Sync prüfen |
+| Restmenge einer Bambu-Spule bleibt stehen | Standard-Modus: das Schätzen der Restmenge in den AMS-Einstellungen aktivieren |
+| Waage: «kein Leergewicht» im Log | Leergewicht bei Spule, Filament oder Hersteller in Spoolman eintragen (Abschnitt 5.5) |
+| Update kommt nicht an | `docker pull …` und **Stop/Start** statt Restart (Abschnitt 3.5) |
+| TrueNAS: `unauthorized` beim Start | Das Docker-Paket ist noch privat (Abschnitt 3.1) |
+
+**Endpunkte der Bridge**
+
+| Adresse | Inhalt |
+|---|---|
+| `/` | Statusseite |
+| `/health` | `{"ok": true}`, wenn die Bridge läuft |
+| `/api/state` | aktueller Stand als JSON |
+| `/api/debug` | Rohdaten der AMS-Meldungen (letzte 5) |
+| `POST /api/scan` | Scan vom Leser: `{"reader", "uid", "weight"}` |
 
 ---
 
-## 10. Grenzen der Version 0.1
+## 13. Bekannte Grenzen
 
-- **Nur AMS-Slots werden automatisch erkannt** (AMS / AMS 2 Pro, über die Belegungsbits des Druckers). AMS HT und die externe Spule sind noch nicht getestet bzw. nicht automatisch.
-- **K-Wert (Pressure Advance)** wird nicht gesetzt. Der Drucker nutzt dafür seine eigene Kalibrierung bzw. die Flussdynamik-Kalibrierung vor dem Druck.
-- **Dual-Nozzle-Befehle:** Der Befehl `ams_filament_setting` wird mit `ams_id`, `tray_id` und `slot_id` gesendet, wie es neuere Bambu-Modelle erwarten. Ob der X2D genau dieses Format annimmt, ist ohne Drucker nicht getestet. Deshalb liest die Bridge nach jedem Setzen die Rückmeldung des Druckers und warnt, wenn sie ausbleibt.
-- **Verbrauch am X2D** noch nicht (Abschnitt 8).
+- **Automatische Slot-Erkennung nur für AMS-Slots** (AMS / AMS 2 Pro, über die Belegungsbits des Druckers). Die externe Spule zeigt die Bridge noch nicht an. AMS HT ist nicht getestet.
+- **K-Wert (Pressure Advance)** wird nicht gesetzt. Der Drucker nutzt seine eigene Kalibrierung.
+- **Slot-Befehl am X2D:** `ams_filament_setting` wird mit `ams_id`, `tray_id` und `slot_id` gesendet. Ob der X2D genau dieses Format annimmt, ist am Gerät noch zu bestätigen. Die Bridge liest nach jedem Setzen die Rückmeldung und warnt, wenn sie ausbleibt.
+- **SV08 mit mehreren Werkzeugen (INDX) oder Tradrack/Happy Hare** wird noch nicht unterstützt. Der SV08 bekommt eine aktive Spule.
+
+---
 
 ## Entwicklung
 
