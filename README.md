@@ -5,6 +5,7 @@ NFC-Spulenerkennung und Spulenwaage für **Bambu Lab X2D** (AMS) und **Klipper/M
 - **X2D:** Spule an den Leser halten oder auf die Waage legen, dann in einen beliebigen AMS-Slot stecken. Die Bridge erkennt den Slot, stellt dort Material, Farbe und Temperaturen ein und setzt in Spoolman den Lagerort.
 - **SV08:** Spule scannen. Sie wird in Moonraker als aktive Spule gesetzt, und Moonraker bucht den Verbrauch selbst in Spoolman ab.
 - **Waage:** Spule auflegen. Das Restgewicht wird automatisch in Spoolman eingetragen.
+- **Eine Seite für alles:** `http://<NAS-IP>:8099` zeigt Live-Gewicht, aufgelegte Spule, Drucker, Lager und Ereignisse. Tara und Kalibrieren gehen direkt dort.
 - **Original-Bambu-Spulen** brauchen keinen Sticker. Das AMS erkennt sie per RFID, wahlweise übernimmt Bambuddy (Abschnitt 8).
 
 ```
@@ -111,7 +112,7 @@ services:
 
 ### 3.4 Prüfen
 
-- **Logs** der App: Die erste Zeile zeigt die Version (`spool-bridge 0.5.0`). Bei Bambu-Druckern folgt `x2d: verbunden mit …`.
+- **Logs** der App: Die erste Zeile zeigt die Version (`spool-bridge 0.6.0`). Bei Bambu-Druckern folgt `x2d: verbunden mit …`.
 - **Statusseite:** `http://<NAS-IP>:8099`. Der X2D erscheint mit grünem Punkt und seinen AMS-Slots.
 - **Spoolman:** Unter *Einstellungen → Extra-Felder* hat die Bridge diese Felder angelegt:
   - bei der Spule: **NFC Tag**, **Bambu Spulen-UUID**, **Stammplatz**
@@ -212,6 +213,8 @@ Spule auf den Teller legen: Der Leser unter dem Teller liest den Sticker, die Wa
 
 **Restgewicht = gewogenes Gewicht − Leergewicht der Spule**
 
+Die Waage meldet das Gewicht **laufend** an die Bridge, bei jeder Änderung sofort und sonst alle 2 Sekunden. Liegt eine bekannte Spule **ruhig** auf (3 Meldungen innerhalb von 2 g), trägt die Bridge das Restgewicht ein. Ändert es sich danach um mehr als 2 g, trägt sie es erneut ein. Du musst eine Spule also nicht abheben und neu auflegen, etwa nach dem Kalibrieren.
+
 Danach geht es weiter wie beim Leser: Am X2D nimmst du die Spule vom Teller und steckst sie innerhalb von 60 s in einen AMS-Slot. Hältst du eine Spule nur an den Leser, ohne sie aufzulegen (unter 30 g), wird kein Gewicht übertragen.
 
 ### 5.1 Teile
@@ -239,12 +242,14 @@ Wägezelle → HX711: rot E+, schwarz E−, weiss A−, grün A+. Die Farben kö
 
 ### 5.3 Einrichten
 
-1. [`esphome/spool-waage-wroom32.yaml`](esphome/spool-waage-wroom32.yaml) flashen. `name`, `reader_id` und `bridge_url` wie beim Leser setzen. Ersetzt die Waage einen bisherigen Leser, beim ersten Flash `use_address` setzen (Abschnitt 4.2).
+1. [`esphome/spool-waage-wroom32.yaml`](esphome/spool-waage-wroom32.yaml) flashen. In den `substitutions` `name`, `reader_id` und **`bridge`** setzen. `bridge` ist die Adresse der Bridge **ohne** `/api/...`, z. B. `http://192.168.1.9:8099`. Ersetzt die Waage einen bisherigen Leser, beim ersten Flash `use_address` setzen (Abschnitt 4.2).
 2. Im ESPHome-Log prüfen: Beim Start müssen auf I2C **0x24** (PN532) und **0x3C** (Display) erscheinen. Meldet sich das Display auf **0x3D**, änderst du in der Firmware `address: 0x3C` entsprechend.
-3. Die Weboberfläche des ESP öffnen: `http://<IP-des-ESP>/`
-4. Teller leer lassen und **Tara** drücken (oder den Touch-Taster).
-5. Ein bekanntes Gewicht auflegen, z. B. eine gewogene volle Spule. Den Wert bei **Kalibriergewicht** eintragen und **Kalibrieren** drücken.
-6. Kontrolle: Unter **Gewicht** steht das richtige Gewicht. Tara und Kalibrierung bleiben nach einem Neustart erhalten.
+3. Die **Statusseite der Bridge** öffnen (`http://<NAS-IP>:8099`). Nach wenigen Sekunden erscheint dort die Karte **Waage** mit dem Live-Gewicht.
+4. Teller leer lassen und **Tara** klicken (oder den Touch-Taster antippen).
+5. Ein bekanntes Gewicht auflegen, z. B. eine gewogene volle Spule. Das Gewicht in Gramm ins Feld neben **Kalibrieren** eintragen und **Kalibrieren** klicken.
+6. Kontrolle: Die Waage zeigt das richtige Gewicht. Tara und Kalibrierung bleiben nach einem Neustart erhalten.
+
+Die Befehle gehen über die Bridge an die Waage und kommen innerhalb von etwa 2 Sekunden an. Alternativ gibt es dieselben Knöpfe auf der Weboberfläche des ESP (`http://<IP-des-ESP>/`).
 
 ### 5.4 Display
 
@@ -465,6 +470,8 @@ Nach Änderungen die App in TrueNAS neu starten.
 | Bambu-Spule erscheint nicht in Spoolman | Das AMS braucht nach dem Einstecken einige Sekunden für den RFID-Chip. Im Bambuddy-Modus den Bambuddy-Sync prüfen |
 | Restmenge einer Bambu-Spule bleibt stehen | Standard-Modus: das Schätzen der Restmenge in den AMS-Einstellungen aktivieren |
 | Waage: «kein Leergewicht» im Log | Leergewicht bei Spule, Filament oder Hersteller in Spoolman eintragen (Abschnitt 5.5) |
+| Waage-Karte fehlt auf der Statusseite | Die Waage meldet sich noch nicht. Firmware mit `bridge: http://<NAS-IP>:8099` geflasht? ESPHome-Log prüfen |
+| Waage zeigt «nicht kalibriert» | Tara, dann mit bekanntem Gewicht Kalibrieren (Abschnitt 5.3) |
 | Update kommt nicht an | `docker pull …` und **Stop/Start** statt Restart (Abschnitt 3.5) |
 | TrueNAS: `unauthorized` beim Start | Das Docker-Paket ist noch privat (Abschnitt 3.1) |
 
@@ -477,6 +484,8 @@ Nach Änderungen die App in TrueNAS neu starten.
 | `/api/state` | aktueller Stand als JSON |
 | `/api/debug` | Rohdaten der AMS-Meldungen (letzte 5) |
 | `POST /api/scan` | Scan vom Leser: `{"reader", "uid", "weight"}` |
+| `POST /api/weight` | laufende Meldung der Waage: `{"reader", "uid", "weight"}`. Antwort enthält Befehle (`tare`, `cal:<g>`) |
+| `POST /api/scale` | Befehl an die Waage: `{"reader", "cmd": "tare"}` oder `{"reader", "cmd": "calibrate", "grams": 1250}` |
 
 ---
 

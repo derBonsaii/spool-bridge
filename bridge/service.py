@@ -8,6 +8,7 @@ import time
 from collections import deque
 from typing import Callable, Optional
 
+from . import __version__
 from .bambu import BambuPrinter, Slot, slot_name
 from .config import Config
 from .detector import SlotDetector
@@ -16,6 +17,52 @@ from .moonraker import Moonraker
 from .spoolman import Spoolman, empty_spool_weight, filament_label, spool_tags, uid_matches, normalize_uid, spool_choice_label, spool_label
 
 log = logging.getLogger(__name__)
+
+
+def spool_view(spool: dict) -> dict:
+    """Spule fürs Web-UI."""
+    f = spool.get("filament") or {}
+    color = (f.get("color_hex") or "")
+    if not color and f.get("multi_color_hexes"):
+        color = f["multi_color_hexes"].split(",")[0]
+    return {
+        "id": spool["id"],
+        "label": spool_label(spool),
+        "vendor": (f.get("vendor") or {}).get("name", "") or "",
+        "color": color.lstrip("#")[:6],
+        "remaining": spool.get("remaining_weight"),
+        "total": spool.get("initial_weight") or f.get("weight"),
+        "empty": empty_spool_weight(spool),
+        "location": spool.get("location") or "",
+        "tags": len(spool_tags(spool)),
+    }
+
+
+class ScaleState:
+    """Live-Zustand einer Waage (wird laufend von der Waage gemeldet)."""
+
+    STABLE_COUNT = 3        # so viele Meldungen in Folge ...
+    STABLE_RANGE = 2.0      # ... innerhalb dieser Spanne (g) = Gewicht ruhig
+    MIN_WEIGHT = 30.0       # darunter gilt der Teller als leer
+    REAPPLY_DIFF = 2.0      # erst bei dieser Änderung (g) erneut in Spoolman schreiben
+
+    def __init__(self, reader: str):
+        self.reader = reader
+        self.weight: Optional[float] = None
+        self.uid = ""
+        self.t: Optional[float] = None
+        self.history: deque = deque(maxlen=self.STABLE_COUNT)
+        self.last_applied: dict[str, float] = {}
+        self.spool_id: Optional[int] = None    # zuletzt erkannte Spule auf der Waage
+        self.spool_seen: Optional[float] = None
+        self.cmd: Optional[str] = None          # wartender Befehl an die Waage
+
+    def stable_weight(self) -> Optional[float]:
+        if len(self.history) < self.STABLE_COUNT:
+            return None
+        if max(self.history) - min(self.history) > self.STABLE_RANGE:
+            return None
+        return sum(self.history) / len(self.history)
 
 
 def display_fields(spool: dict, remaining: Optional[float] = None) -> dict:
@@ -46,6 +93,7 @@ class Bridge:
         self._spool_cache: tuple = (None, [])
         self._filament_cache: tuple = (None, [])
         self._rfid: dict[str, dict] = {}  # printer -> slot -> {uuid, spool_id, remain}
+        self.scales: dict[str, ScaleState] = {}
 
     # ------------------------------------------------------------ Setup
     def add_bambu(self, printer: BambuPrinter) -> None:
@@ -123,8 +171,11 @@ class Bridge:
 
         label = spool_label(spool)
         remaining = None
+        scale = self.scales.setdefault(reader, ScaleState(reader))
+        scale.spool_id, scale.spool_seen = spool["id"], self.clock()
         if weight is not None:
             remaining = await self._apply_weight(spool, weight)
+            scale.last_applied[uid] = weight
         info = display_fields(spool, remaining)
         if not printer:
             return {"result": "weighed", "spool": label, **info}
@@ -165,6 +216,53 @@ class Bridge:
         return {"result": "linked"}
 
     # ------------------------------------------------------------ Waage
+    async def handle_weight(self, reader: str, uid: str, weight: Optional[float]) -> dict:
+        """Laufende Meldung einer Waage: Gewicht + Tag, der gerade aufliegt.
+
+        Liegt eine bekannte Spule ruhig auf und hat sich das Gewicht seit dem letzten
+        Eintrag geändert, wird das Restgewicht in Spoolman nachgeführt. Die Antwort
+        enthält einen wartenden Befehl (Tara/Kalibrieren) für die Waage.
+        """
+        if reader not in self.cfg.readers:
+            return {"cmd": ""}
+        s = self.scales.setdefault(reader, ScaleState(reader))
+        uid = normalize_uid(uid)
+        if s.uid and not uid:
+            s.last_applied.clear()  # Spule abgehoben -> beim nächsten Auflegen neu wiegen
+        s.uid, s.t = uid, self.clock()
+        if weight is None or weight < ScaleState.MIN_WEIGHT:
+            s.weight = weight
+            s.history.clear()
+        else:
+            s.weight = weight
+            s.history.append(weight)
+
+        stable = s.stable_weight()
+        if uid and stable is not None:
+            last = s.last_applied.get(uid)
+            if last is None or abs(stable - last) > ScaleState.REAPPLY_DIFF:
+                spool = await self.spoolman.find_by_uid(uid)
+                if spool is not None:
+                    s.last_applied[uid] = stable
+                    s.spool_id, s.spool_seen = spool["id"], self.clock()
+                    await self._apply_weight(spool, stable)
+        if uid and s.spool_id is not None:
+            s.spool_seen = self.clock()
+
+        cmd, s.cmd = s.cmd, None
+        return {"cmd": cmd or ""}
+
+    def scale_command(self, reader: str, cmd: str, grams: Optional[float] = None) -> None:
+        s = self.scales.setdefault(reader, ScaleState(reader))
+        if cmd == "tare":
+            s.cmd = "tare"
+            self.event("info", f"Waage {reader}: Tara angefordert")
+        elif cmd == "calibrate" and grams and grams > 0:
+            s.cmd = f"cal:{grams:.1f}"
+            self.event("info", f"Waage {reader}: Kalibrieren mit {grams:.0f} g angefordert")
+        else:
+            raise ValueError("unbekannter Befehl")
+
     async def _apply_weight(self, spool: dict, gross: float) -> Optional[float]:
         """Bruttogewicht (Spule auf der Waage) -> Restgewicht in Spoolman."""
         empty = empty_spool_weight(spool)
@@ -340,8 +438,29 @@ class Bridge:
         for name in self.moonraker:
             printers.append({"name": name, "type": "moonraker", "connected": True,
                              "spool": by_loc.get(self._location(name), "")})
+        now = self.clock()
+        spool_by_id = {sp["id"]: sp for sp in spools}
+        scales = []
+        for r, sc in self.scales.items():
+            spool = None
+            if sc.spool_id is not None and sc.spool_seen is not None and now - sc.spool_seen < 30:
+                spool = spool_by_id.get(sc.spool_id)
+            scales.append({
+                "reader": r,
+                "printer": self.cfg.readers.get(r) or "",
+                "online": sc.t is not None and now - sc.t < 8,
+                "weight": sc.weight,
+                "uid": sc.uid,
+                "pending": sc.cmd or "",
+                "spool": spool_view(spool) if spool else None,
+                "unknown_tag": bool(sc.uid) and (self.unknown or {}).get("uid") == sc.uid,
+            })
         return {
+            "version": __version__,
             "printers": printers,
+            "scales": scales,
+            "inventory": sorted((spool_view(sp) for sp in spools),
+                                key=lambda x: (x["location"].lower(), x["label"].lower())),
             "events": list(self.events),
             "unknown": self.unknown,
             "filaments": sorted(({"id": f["id"], "label": filament_label(f)} for f in filaments),

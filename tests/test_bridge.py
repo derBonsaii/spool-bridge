@@ -500,3 +500,60 @@ async def test_bambuddy_mode_only_learns_tag(env):
     printer.report({"ams": [{"id": "0", "tray": [{"id": "1"}]}], "tray_exist_bits": "0"})
     await _settle(bridge)
     assert fake.spools[2]["location"] == "X2D - AMS A Slot 2"
+
+
+async def test_live_weight_updates_spoolman_when_stable(env):
+    fake, bridge, printer, clock = env
+    fake.spools[1]["spool_weight"] = 200
+    # Spule liegt auf, Gewicht pendelt sich ein
+    for w in (400, 900, 1155, 1157, 1156):
+        res = await bridge.handle_weight("x2d", "04A1B2C3", w)
+        assert res == {"cmd": ""}
+    assert fake.spools[1]["remaining_weight"] == pytest.approx(956, abs=1)
+
+    # gleiches Gewicht -> kein erneuter Eintrag; deutliche Änderung -> neuer Eintrag
+    fake.spools[1]["remaining_weight"] = 111
+    for w in (1157, 1156, 1157):
+        await bridge.handle_weight("x2d", "04A1B2C3", w)
+    assert fake.spools[1]["remaining_weight"] == 111
+    for w in (1100, 1100, 1100):
+        await bridge.handle_weight("x2d", "04A1B2C3", w)
+    assert fake.spools[1]["remaining_weight"] == 900
+
+    # abheben und wieder auflegen -> wird neu gewogen, auch bei gleichem Gewicht
+    fake.spools[1]["remaining_weight"] = 5
+    await bridge.handle_weight("x2d", "", 0)
+    for w in (1100, 1100, 1100):
+        await bridge.handle_weight("x2d", "04A1B2C3", w)
+    assert fake.spools[1]["remaining_weight"] == 900
+
+    st = await bridge.state()
+    sc = st["scales"][0]
+    assert sc["online"] and sc["weight"] == 1100 and sc["spool"]["label"] == "PLA Rot"
+    assert sc["spool"]["empty"] == 200
+
+
+async def test_scale_commands_are_delivered_once(env):
+    fake, bridge, printer, clock = env
+    bridge.scale_command("x2d", "tare")
+    assert (await bridge.handle_weight("x2d", "", None)) == {"cmd": "tare"}
+    assert (await bridge.handle_weight("x2d", "", None)) == {"cmd": ""}
+    bridge.scale_command("x2d", "calibrate", 1250)
+    assert (await bridge.handle_weight("x2d", "", 12.0)) == {"cmd": "cal:1250.0"}
+    with pytest.raises(ValueError):
+        bridge.scale_command("x2d", "calibrate", 0)
+
+
+async def test_weight_api_endpoints(env, aiohttp_client):
+    from bridge.web import make_app
+    fake, bridge, printer, clock = env
+    client = await aiohttp_client(make_app(bridge))
+    r = await client.post("/api/scale", json={"reader": "x2d", "cmd": "tare"})
+    assert r.status == 200
+    r = await client.post("/api/weight", json={"reader": "x2d", "uid": "", "weight": ""})
+    assert (await r.json()) == {"cmd": "tare"}
+    r = await client.post("/api/scale", json={"reader": "x2d", "cmd": "kaputt"})
+    assert r.status == 400
+    r = await client.get("/api/state")
+    data = await r.json()
+    assert "scales" in data and "inventory" in data and data["version"]

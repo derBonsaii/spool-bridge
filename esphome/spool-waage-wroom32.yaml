@@ -40,7 +40,7 @@
 substitutions:
   name: spool-waage-x2d       # Gerätename im Netz
   reader_id: x2d              # muss in config.yaml unter readers stehen
-  bridge_url: http://truenas.local:8099/api/scan
+  bridge: http://truenas.local:8099   # Adresse der Bridge (ohne /api/...)
   led_pin: GPIO2              # Onboard-LED der meisten WROOM-32-DevKits
   min_weight: "30"            # darunter gilt der Teller als leer (Gramm)
   settle_ms: 1500ms           # Wartezeit nach dem Auflegen, bis das Gewicht ruhig ist
@@ -71,6 +71,18 @@ web_server:
   version: 3
 
 globals:
+  - id: current_tag       # Tag, der gerade auf der Waage liegt
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: last_pushed       # zuletzt an die Bridge gemeldetes Gewicht
+    type: float
+    restore_value: false
+    initial_value: "NAN"
+  - id: push_ticks
+    type: int
+    restore_value: false
+    initial_value: "0"
   - id: line_top          # Hersteller + Material bzw. Status
     type: std::string
     restore_value: false
@@ -189,7 +201,7 @@ button:
 
 http_request:
   verify_ssl: false
-  timeout: 10s
+  timeout: 3s
 
 i2c:
   sda: GPIO21
@@ -243,10 +255,75 @@ script:
             - light.turn_off: status_led
             - delay: 80ms
 
+# Gewicht laufend an die Bridge melden (bei Änderung sofort, sonst alle 2 s).
+# Die Bridge führt damit das Restgewicht nach, zeigt das Live-Gewicht auf ihrer
+# Statusseite und schickt in der Antwort Befehle zurück (Tara / Kalibrieren).
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              float w = id(spool_weight).state;
+              float last = id(last_pushed);
+              bool changed = (isnan(w) != isnan(last)) || (!isnan(w) && fabsf(w - last) >= 1.0f);
+              id(push_ticks) += 1;
+              if (changed || id(push_ticks) >= 2) {
+                id(push_ticks) = 0;
+                id(last_pushed) = w;
+                return true;
+              }
+              return false;
+          then:
+            - http_request.post:
+                url: ${bridge}/api/weight
+                request_headers:
+                  Content-Type: application/json
+                json:
+                  reader: ${reader_id}
+                  uid: !lambda return id(current_tag);
+                  weight: !lambda |-
+                    float w = id(spool_weight).state;
+                    if (isnan(w)) return std::string("");
+                    return str_sprintf("%.1f", w);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        // Befehl aus der Antwort: {"cmd": "tare"} oder {"cmd": "cal:1250.0"}
+                        std::string k = "\"cmd\": \"";
+                        size_t p = body.find(k);
+                        if (p == std::string::npos) return;
+                        p += k.size();
+                        size_t e = body.find('"', p);
+                        if (e == std::string::npos) return;
+                        std::string cmd = body.substr(p, e - p);
+                        if (cmd == "tare") {
+                          id(tare_raw) = id(scale_raw).state;
+                          ESP_LOGI("waage", "Tara (von der Bridge)");
+                        } else if (cmd.rfind("cal:", 0) == 0) {
+                          float g = atof(cmd.substr(4).c_str());
+                          float diff = id(scale_raw).state - id(tare_raw);
+                          if (g > 0 && diff != 0) {
+                            id(scale_factor) = diff / g;
+                            auto call = id(cal_weight).make_call();
+                            call.set_value(g);
+                            call.perform();
+                            ESP_LOGI("waage", "Kalibriert (von der Bridge): %.3f Rohwert/g", id(scale_factor));
+                          } else {
+                            ESP_LOGW("waage", "Kalibrieren fehlgeschlagen: erst Tara, dann Gewicht auflegen");
+                          }
+                        }
+
 pn532_i2c:
   update_interval: 500ms
+  on_tag_removed:
+    then:
+      - lambda: id(current_tag) = "";
   on_tag:
     then:
+      - lambda: id(current_tag) = x;
       - lambda: |-
           id(line_top) = "Lese...";
           id(line_name) = "";
@@ -254,7 +331,7 @@ pn532_i2c:
       # kurz warten, bis die Spule ruhig liegt und das Gewicht stabil ist
       - delay: ${settle_ms}
       - http_request.post:
-          url: ${bridge_url}
+          url: ${bridge}/api/scan
           request_headers:
             Content-Type: application/json
           json:

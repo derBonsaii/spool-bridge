@@ -41,6 +41,26 @@ def make_app(bridge: Bridge) -> web.Application:
         status = {"unknown": 404, "error": 400}.get(res["result"], 200)
         return web.json_response(res, status=status, dumps=_dumps)
 
+    async def weight(request):
+        data = await request.json()
+        w = None
+        try:
+            if str(data.get("weight", "")).strip():
+                w = float(data["weight"])
+        except (TypeError, ValueError):
+            w = None
+        res = await bridge.handle_weight(str(data.get("reader", "")), str(data.get("uid", "")), w)
+        return web.json_response(res)
+
+    async def scale_cmd(request):
+        data = await request.json()
+        try:
+            grams = float(data["grams"]) if data.get("grams") not in (None, "") else None
+            bridge.scale_command(str(data["reader"]), str(data["cmd"]), grams)
+        except (KeyError, ValueError) as e:
+            return web.json_response({"result": "error", "message": str(e)}, status=400)
+        return web.json_response({"result": "queued"})
+
     async def link(request):
         data = await request.json()
         spool_id = int(data["spool_id"]) if data.get("spool_id") else None
@@ -79,6 +99,8 @@ def make_app(bridge: Bridge) -> web.Application:
     app.router.add_get("/api/state", state)
     app.router.add_post("/api/scan", scan)
     app.router.add_post("/api/link", link)
+    app.router.add_post("/api/weight", weight)
+    app.router.add_post("/api/scale", scale_cmd)
     app.router.add_post("/api/assign", assign)
     app.router.add_get("/health", health)
     app.router.add_get("/api/debug", debug)
