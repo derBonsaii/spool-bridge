@@ -80,6 +80,7 @@
 <main>
   <header><h1>spool-bridge</h1><span class="mute small" id="ver"></span></header>
 
+  <div id="update"></div>
   <div id="unknown"></div>
   <div id="scales"></div>
   <div id="printers"></div>
@@ -279,6 +280,12 @@ async function refresh() {
   try {
     state = await (await fetch("/api/state")).json();
     $("#ver").textContent = state.version ? "v" + state.version : "";
+    if (changed("update", state.update)) {
+      $("#update").innerHTML = state.update ? `<div class="card" style="border-color:var(--acc)">
+        <b>Update verfügbar: v${esc(state.update)}</b> <span class="mute">(installiert: v${esc(state.version)})</span><br>
+        <span class="small">In TrueNAS bei der App <b>spoolbridge</b> auf <b>Stop</b> und dann <b>Start</b> klicken.
+        Damit das neue Image geladen wird, muss in der App-YAML <code>pull_policy: always</code> stehen.</span></div>` : "";
+    }
     renderUnknown(state); renderScales(state); renderPrinters(state); renderInventory(state); renderEvents(state);
   } catch (e) { /* Bridge kurz nicht erreichbar */ }
 }

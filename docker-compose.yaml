@@ -11,6 +11,7 @@ services:
 
   spool-bridge:
     image: ghcr.io/derbonsaii/spool-bridge:latest
+    pull_policy: always        # bei jedem Start das neueste Image holen
     restart: unless-stopped
     depends_on:
       - spoolman

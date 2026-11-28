@@ -94,6 +94,7 @@ class Bridge:
         self._filament_cache: tuple = (None, [])
         self._rfid: dict[str, dict] = {}  # printer -> slot -> {uuid, spool_id, remain}
         self.scales: dict[str, ScaleState] = {}
+        self.updates = None  # UpdateChecker, falls aktiv
 
     # ------------------------------------------------------------ Setup
     def add_bambu(self, printer: BambuPrinter) -> None:
@@ -465,6 +466,7 @@ class Bridge:
             })
         return {
             "version": __version__,
+            "update": self.updates.update_available if self.updates else None,
             "printers": printers,
             "scales": scales,
             "inventory": sorted((spool_view(sp) for sp in spools),

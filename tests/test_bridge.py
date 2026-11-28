@@ -596,3 +596,21 @@ async def test_bambu_rfid_adopts_unique_match_after_restart(env):
     await _settle(bridge)
     assert len(fake.spools) == 3
     assert json.loads(fake.spools[3]["extra"]["bambu_uuid"]) == BAMBU_TRAY["tray_uuid"]
+
+
+def test_update_version_compare():
+    from bridge.updates import is_newer, parse_version
+    assert parse_version('__version__ = "0.6.2"\n') == "0.6.2"
+    assert is_newer("0.6.10", "0.6.2") and not is_newer("0.6.1", "0.6.1")
+    assert not is_newer("0.5.9", "0.6.0")
+
+
+async def test_update_banner_in_state(env):
+    from bridge.updates import UpdateChecker
+    fake, bridge, printer, clock = env
+    uc = UpdateChecker(session=None)
+    uc.latest = "99.0.0"
+    bridge.updates = uc
+    assert (await bridge.state())["update"] == "99.0.0"
+    uc.latest = "0.0.1"
+    assert (await bridge.state())["update"] is None

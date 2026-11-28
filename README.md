@@ -100,6 +100,7 @@ Läuft Spoolman bei dir schon, lässt du den `spoolman`-Block weg. Dann installi
 services:
   spool-bridge:
     image: ghcr.io/derbonsaii/spool-bridge:latest
+    pull_policy: always        # bei jedem Start das neueste Image holen
     restart: unless-stopped
     ports:
       - "8099:8099"
@@ -112,7 +113,7 @@ services:
 
 ### 3.4 Prüfen
 
-- **Logs** der App: Die erste Zeile zeigt die Version (`spool-bridge 0.6.1`). Bei Bambu-Druckern folgt `x2d: verbunden mit …`.
+- **Logs** der App: Die erste Zeile zeigt die Version (`spool-bridge 0.6.2`). Bei Bambu-Druckern folgt `x2d: verbunden mit …`.
 - **Statusseite:** `http://<NAS-IP>:8099`. Der X2D erscheint mit grünem Punkt und seinen AMS-Slots.
 - **Spoolman:** Unter *Einstellungen → Extra-Felder* hat die Bridge diese Felder angelegt:
   - bei der Spule: **NFC Tag**, **Bambu Spulen-UUID**, **Stammplatz**
@@ -120,12 +121,13 @@ services:
 
 ### 3.5 Aktualisieren
 
-1. In der TrueNAS-Shell das neue Image holen:
-   ```sh
-   docker pull ghcr.io/derbonsaii/spool-bridge:latest
-   ```
-2. Bei der App **Stop**, dann **Start** klicken. Ein reines «Restart» übernimmt das neue Image nicht unbedingt.
-3. Im Log die Versionsnummer kontrollieren.
+Die Bridge prüft alle 6 Stunden auf GitHub, ob es eine neue Version gibt, und zeigt dann oben auf der Statusseite **«Update verfügbar»** an. Abschalten lässt sich das mit der Umgebungsvariable `UPDATE_CHECK=0`.
+
+**Mit `pull_policy: always`** in der App-YAML (siehe 3.3) genügt zum Aktualisieren:
+1. Bei der App **Stop**, dann **Start** klicken. TrueNAS lädt dabei automatisch das neueste Image.
+2. Im Log oder auf der Statusseite die Versionsnummer kontrollieren.
+
+Ohne `pull_policy` holst du das Image vorher in der TrueNAS-Shell mit `docker pull ghcr.io/derbonsaii/spool-bridge:latest`. Eine bestehende App stellst du um, indem du sie bearbeitest (Apps → spoolbridge → **Edit**) und die Zeile `pull_policy: always` beim Service ergänzt.
 
 Die `config.yaml` bleibt dabei erhalten. Nach Änderungen an der `config.yaml` reicht ein Neustart der App.
 

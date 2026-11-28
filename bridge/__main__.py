@@ -34,6 +34,10 @@ async def main() -> None:
     async with aiohttp.ClientSession(timeout=timeout) as session:
         spoolman = Spoolman(cfg.spoolman_url, session)
         bridge = Bridge(cfg, spoolman)
+        if os.environ.get("UPDATE_CHECK", "1") != "0":
+            from .updates import UpdateChecker
+            bridge.updates = UpdateChecker(session)
+            asyncio.ensure_future(bridge.updates.run())
 
         for attempt in range(30):
             try:
