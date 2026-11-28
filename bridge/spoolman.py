@@ -187,6 +187,49 @@ class Spoolman:
                 return s
         return None
 
+    async def find_bambu_candidate(self, info: dict, slot_location: str):
+        """Passende Spule für eine Bambu-RFID-Spule suchen, bevor eine neue angelegt wird.
+
+        Reihenfolge: Bambu-UUID -> Tag-Kennung -> gerade per Scan diesem Slot zugewiesen ->
+        eindeutig passende Bambu-Spule ohne UUID (z.B. über die Waage angelegt).
+        Gibt (spool, grund) oder (None, grund) zurück.
+        """
+        spool = await self.find_by_bambu_uuid(info["uuid"])
+        if spool is not None:
+            return spool, "uuid"
+        spools = await self.spools()
+        free = [s for s in spools if not spool_bambu_uuid(s)]
+        if info.get("tag_uid"):
+            for s in free:
+                if any(uid_matches(t, info["tag_uid"]) for t in spool_tags(s)):
+                    return s, "tag"
+        for s in free:
+            if slot_location and s.get("location") == slot_location:
+                return s, "slot"
+        material = (info.get("material") or "").upper()
+        cands = []
+        for s in free:
+            f = s.get("filament") or {}
+            if ((f.get("vendor") or {}).get("name") or "").lower() != BAMBU_VENDOR.lower():
+                continue
+            if (f.get("material") or "").upper() != material:
+                continue
+            idx = _decode_extra((f.get("extra") or {}).get(BAMBU_IDX_FIELD))
+            same_idx = bool(idx) and idx == info.get("idx")
+            close = color_distance(f.get("color_hex"), info.get("color_hex")) <= 40
+            if close and (same_idx or not idx):
+                cands.append(s)
+        if len(cands) == 1:
+            return cands[0], "match"
+        return None, ("ambiguous" if cands else "none")
+
+    async def adopt_bambu_spool(self, spool: dict, uuid: str) -> None:
+        """Bestehender Spule die Bambu-UUID nachtragen."""
+        extra = dict(spool.get("extra") or {})
+        extra[BAMBU_UUID_FIELD] = json.dumps(uuid.upper())
+        await self._req("PATCH", f"/spool/{spool['id']}", json={"extra": extra})
+        spool["extra"] = extra
+
     async def _bambu_vendor_id(self) -> int:
         for v in await self._req("GET", "/vendor"):
             if (v.get("name") or "").lower() == BAMBU_VENDOR.lower():

@@ -557,3 +557,42 @@ async def test_weight_api_endpoints(env, aiohttp_client):
     r = await client.get("/api/state")
     data = await r.json()
     assert "scales" in data and "inventory" in data and data["version"]
+
+
+async def test_bambu_rfid_adopts_spool_created_via_scale(env):
+    """Über die Waage angelegte Bambu-Spule wird beim Einstecken übernommen, nicht verdoppelt."""
+    fake, bridge, printer, clock = env
+    fake.vendors.append({"id": 1, "name": "Bambu Lab"})
+    fake.filaments.append({"id": 1, "name": "Matte Charcoal", "material": "PLA",
+                           "color_hex": "0086D6", "vendor": fake.vendors[0], "extra": {}})
+    fake.spools[3] = {"id": 3, "location": "PLA", "remaining_weight": 730,
+                      "extra": {"nfc_id": json.dumps("62F57077")}, "filament": fake.filaments[0]}
+    printer.report({"ams": [{"id": "0", "tray": [{"id": str(i)} for i in range(4)]}],
+                    "tray_exist_bits": "0"})
+    # gescannt (andere Seite als die, die das AMS liest) und eingesteckt
+    await bridge.handle_scan("x2d", "62F57077")
+    clock["t"] = 3
+    printer.report({"tray_exist_bits": "1"})
+    await _settle(bridge)
+    tray = {**BAMBU_TRAY, "id": "0", "tag_uid": "AABBCCDD00000000"}
+    printer.report({"ams": [{"id": "0", "tray": [tray]}]})
+    await _settle(bridge)
+
+    assert len(fake.spools) == 3  # keine neue Spule
+    sp = fake.spools[3]
+    assert json.loads(sp["extra"]["bambu_uuid"]) == BAMBU_TRAY["tray_uuid"]
+    assert sp["remaining_weight"] == 730  # Waagen-Wert bleibt
+    assert sp["location"] == "X2D AMS A1"
+    assert "AABBCCDD00000000" in json.loads(sp["extra"]["nfc_id"])
+
+
+async def test_bambu_rfid_adopts_unique_match_after_restart(env):
+    fake, bridge, printer, clock = env
+    fake.vendors.append({"id": 1, "name": "Bambu Lab"})
+    fake.filaments.append({"id": 1, "name": "Matte Charcoal", "material": "PLA",
+                           "color_hex": "0A88D0", "vendor": fake.vendors[0], "extra": {}})
+    fake.spools[3] = {"id": 3, "location": "PLA", "extra": {}, "filament": fake.filaments[0]}
+    printer.report({"ams": [{"id": "0", "tray": [{**BAMBU_TRAY, "id": "0"}]}], "tray_exist_bits": "1"})
+    await _settle(bridge)
+    assert len(fake.spools) == 3
+    assert json.loads(fake.spools[3]["extra"]["bambu_uuid"]) == BAMBU_TRAY["tray_uuid"]

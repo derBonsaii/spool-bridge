@@ -112,7 +112,7 @@ services:
 
 ### 3.4 Prüfen
 
-- **Logs** der App: Die erste Zeile zeigt die Version (`spool-bridge 0.6.0`). Bei Bambu-Druckern folgt `x2d: verbunden mit …`.
+- **Logs** der App: Die erste Zeile zeigt die Version (`spool-bridge 0.6.1`). Bei Bambu-Druckern folgt `x2d: verbunden mit …`.
 - **Statusseite:** `http://<NAS-IP>:8099`. Der X2D erscheint mit grünem Punkt und seinen AMS-Slots.
 - **Spoolman:** Unter *Einstellungen → Extra-Felder* hat die Bridge diese Felder angelegt:
   - bei der Spule: **NFC Tag**, **Bambu Spulen-UUID**, **Stammplatz**
@@ -383,7 +383,7 @@ Die umgekehrte Reihenfolge geht auch: zuerst einstecken, dann innerhalb von 60 s
 ### X2D: Original-Bambu-Spule
 
 Einfach ins AMS stecken, **nicht scannen**. Sobald das AMS den RFID-Chip gelesen hat:
-- **Standard-Modus:** Die Bridge sucht die Spule über ihre Bambu-Spulen-UUID oder legt sie an. Sie setzt den Lagerort und übernimmt die Restmenge, die das AMS meldet.
+- **Standard-Modus:** Die Bridge sucht die passende Spule und legt nur dann eine neue an, wenn es keine gibt. Gesucht wird in dieser Reihenfolge: über die Bambu-Spulen-UUID, über die Tag-Kennung, über die Spule, die gerade per Scan diesem Slot zugewiesen wurde, und über eine eindeutig passende Bambu-Spule ohne UUID (z. B. vorher über die Waage angelegt). Bei einer gefundenen Spule trägt sie die UUID nach und behält das Restgewicht der Waage. Danach setzt sie den Lagerort und führt die Restmenge nach, die das AMS meldet.
 - **Bambuddy-Modus:** Bambuddy erledigt das (Abschnitt 8).
 
 In beiden Fällen merkt sich die Bridge die **Kennung des RFID-Chips** im Feld *NFC Tag*. Danach erkennen Leser und Waage die Bambu-Spule. Jede Bambu-Spule hat **zwei Chips, einen auf jeder Seite**. Gelernt wird nur der, den das AMS gelesen hat. Die andere Seite verknüpfst du einmal auf der Statusseite mit derselben Spule.

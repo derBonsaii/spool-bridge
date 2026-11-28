@@ -351,13 +351,21 @@ class Bridge:
 
     async def _register_bambu_spool_inner(self, printer: str, slot: Slot, info: dict) -> None:
         loc = self._location(printer, slot)
-        spool = await self.spoolman.find_by_bambu_uuid(info["uuid"])
+        spool, how = await self.spoolman.find_bambu_candidate(info, loc)
         if spool is None:
             filament = await self.spoolman.find_or_create_bambu_filament(info)
             spool = await self.spoolman.create_bambu_spool(filament["id"], info["uuid"], loc,
                                                            info["remaining"])
-            self.event("ok", f"{printer} {slot_name(slot)}: Bambu-Spule erkannt und in Spoolman "
-                             f"angelegt ({spool_label(spool)})")
+            hint = (" – mehrere passende Spulen ohne Bambu-UUID gefunden, bitte Duplikat prüfen"
+                    if how == "ambiguous" else "")
+            self.event("warn" if hint else "ok",
+                       f"{printer} {slot_name(slot)}: Bambu-Spule erkannt und in Spoolman "
+                       f"angelegt ({spool_label(spool)}){hint}")
+        elif how != "uuid":
+            # z.B. über die Waage angelegt: UUID nachtragen, Restgewicht der Waage behalten
+            await self.spoolman.adopt_bambu_spool(spool, info["uuid"])
+            self.event("ok", f"{printer} {slot_name(slot)}: Bambu-Spule {spool_label(spool)} "
+                             f"erkannt und mit der bestehenden Spule verbunden")
         else:
             if spool.get("archived"):
                 await self.spoolman._req("PATCH", f"/spool/{spool['id']}", json={"archived": False})
